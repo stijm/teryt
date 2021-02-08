@@ -4,9 +4,9 @@
 # Author: Stim, 2021
 # License: GNU GPLv3
 
-from pandas import (  # noqa: F401
+from pandas import (
     Series,
-    DataFrame
+    DataFrame  # noqa: F401
 )
 from typing import Any
 from re import escape

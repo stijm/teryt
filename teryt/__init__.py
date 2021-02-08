@@ -1,3 +1,5 @@
+# flake8: noqa
+
 """ Search TERYT. """
 
 # This is the part of teryt library.
