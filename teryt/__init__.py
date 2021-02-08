@@ -1,9 +1,9 @@
 # flake8: noqa
 
-""" Search TERYT. """
+""" Initialization module. """
 
 # This is the part of teryt library.
-# Author: Stim, 2021
+# Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
 from .data.manager import resource_file

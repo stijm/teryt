@@ -1,7 +1,7 @@
 """ Exceptions. """
 
 # This is the part of teryt library.
-# Author: Stim, 2021
+# Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
 

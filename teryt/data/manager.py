@@ -1,7 +1,7 @@
 """ Manage TERYT data. """
 
 # This is the part of teryt library.
-# Author: Stim, 2021
+# Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
 import os
@@ -13,8 +13,7 @@ directory = os.path.abspath(os.path.dirname(__file__))
 
 def resource_file(system):
     """
-    Resolve the path of a TERYT system .csv resource file.
-    Return its path.
+    Resolve the path of a TERYT system .csv resource file and return it.
 
     Parameters
     ----------

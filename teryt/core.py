@@ -1,7 +1,7 @@
 """ Search TERYT. """
 
 # This is the part of teryt library.
-# Author: Stim, 2021
+# Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
 import dataclasses
@@ -24,7 +24,7 @@ from .tools import (
 )
 from .exceptions import (
     ErroneousUnitName,
-    Error as _Error,
+    Error,
     LocalityNotFound,
     StreetNotFound,
     UnitNotFound,
@@ -279,7 +279,7 @@ class Register(ABC):
         self.ulic = ulic_data
         self.system = self.__class__.__name__.replace(' ', '_').casefold()
         if self.system == "Register".casefold():
-            raise _Error("abstract class")
+            raise Error("abstract class")
         self.field: pandas.DataFrame = getattr(
             self, self.system, None
         )
