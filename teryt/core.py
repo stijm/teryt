@@ -44,7 +44,7 @@ def transferred_searches(name):
 class Link(object):
     """ TERYT Link. """
 
-    id: str
+    code: str
     name: typing.Any
 
     def __getitem__(self, item: (str, int)):
@@ -54,18 +54,18 @@ class Link(object):
         )[isinstance(item, int)][item]
 
     def __str__(self):
-        return str(self.id or '')
+        return str(self.code or '')
 
     def __add__(self, other):
-        return (str(self.id) + other) if self else ('' + other)
+        return (str(self.code) + other) if self else ('' + other)
 
     def __bool__(self):
-        return all([self.name, self.id])
+        return all([self.name, self.code])
 
     def __iter__(self):
         if self.name:
             yield 'name', self.name
-        yield 'ID', self.id
+        yield 'code', self.code
         i = getattr(self, 'index', None)
         if i:
             yield 'index', i
@@ -249,11 +249,15 @@ class GenericLinkManagerSentinel(object):
                 continue
             elif klass.has_dict_lm(name):
                 link_manager = getattr(klass, name + '_link_manager')
-                if value not in link_manager:
+                if value.isnumeric() and value in link_manager.values():
+                    value = dict(map(
+                        lambda pair: (pair[1], pair[0]), link_manager))[value]
+                elif value not in link_manager:
                     e = f'{value!r} is not a valid ' \
                         f'{name.replace("_", " ")!r} non-ID value'
                     raise ValueError(e)
-                value = link_manager[value]
+                else:
+                    value = link_manager[value]
             self.unlinkable_args.update({name: value})
 
 
@@ -373,7 +377,7 @@ class GenericLinkManager(object):
 
         if value_space == 'integral':  # special case
             new = simc()
-            integral = (lambda: new.search(integral_id=value))
+            integral = new.search
             return integral
 
         unit_link_manager = terc()
@@ -588,7 +592,7 @@ class Register(ABC):
         'function',
     )
     by_prefix = (
-        'date',
+        'date',  # TODO: it should be a datetime argument
     )
     locname_keywords = (
         'name',
@@ -942,15 +946,15 @@ class Register(ABC):
                         value_space, None)
                     if index:
                         self.entry_helper[value_space] = UnitLink(
-                            id=value, name=name, index=index)
+                            code=value, name=name, index=index)
                     else:
                         self.entry_helper[value_space] = Link(
-                            id=value, name=name)
+                            code=value, name=name)
 
         # TODO: move this somewhere else…
         if "integral_id" in self.entry_helper:
             self.entry_helper[
-                'integral_lambda'] = self.link_manager.link(
+                'integral_func'] = self.link_manager.link(
                 "integral", self.entry_helper['integral_id'])
 
         self.entry_helper['terid'] = self.pack_terid(**self.entry_helper)
@@ -1031,6 +1035,8 @@ class Register(ABC):
         0  11907  06  11  06        2  01  1  Poznań  0686397  0686397  2021-01-01
         1  76796  24  10  03        2  00  1  Poznań  0217047  0216993  2021-01-01
         2  95778  30  64  01        1  96  1  Poznań  0969400  0969400  2021-01-01
+
+        >>> s.search("Poznań")
 
         Returns
         -------
@@ -1224,15 +1230,15 @@ class ResultFrameWrapper(object):
         1   5699  04  04  03        2  00  1  Warszawa  0845000  0844991  2021-01-01
         2   5975  04  14  07        2  00  1  Warszawa  0093444  0093438  2021-01-01
 
-        >>> warsaw.to_list("sym")  # equivalent to warsaw.to_list("id")
+        >>> warsaw.results.to_list("sym")  # equivalent to to_list("id")
         ['1030760', '0845000', '0093444']
 
-        >>> warsaw.to_list("powiat")  # equivalent to warsaw.to_list("pow")
+        >>> warsaw.results.to_list("powiat")  # equivalent to_list("pow")
         [UnitLink(id='14', name='świecki', index=469),
          UnitLink(id='04', name='chełmiński', index=358),
          UnitLink(id='14', name='świecki', index=469)]
 
-        >>> warsaw.to_list("powiat", link=False)
+        >>> warsaw.results.to_list("pow", link=False)
         ['14', '04', '14']
 
         Returns
@@ -1274,7 +1280,7 @@ class Entry(object):
     secname: str = None
     function: str = None
     id: str = None
-    integral_lambda: type(lambda: None) = (lambda: None)
+    integral_func: type(lambda: None) = (lambda: None)
     integral_id: str = None
     row: pandas.DataFrame = None
     date: str = None
@@ -1286,7 +1292,8 @@ class Entry(object):
 
     @property
     def integral(self):
-        return self.integral_lambda()
+        if self.integral_id:
+            return self.integral_func.__call__(id=self.integral_id)
 
     def __getattribute__(self, item):
         # Register is mutable;
