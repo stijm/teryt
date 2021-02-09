@@ -617,6 +617,23 @@ class Register(ABC):
         f'Try looking for the proper argument name ' \
         f'in the following list:\n{" " * 12}%s.'
 
+    gmitype_link_manager = {
+        'miejska': '1',
+        'gmina miejska': '1',
+        'wiejska': '2',
+        'gmina wiejska': '2',
+        'miejsko-wiejska': '3',
+        'gmina miejsko-wiejska': '3',
+        'miasto w gminie miejsko-wiejskiej': '4',
+        'obszar wiejski w gminie miejsko-wiejskiej': '5',
+        'dzielnice m. st. Warszawy': '8',
+        'dzielnice Warszawy': '8',
+        'dzielnica Warszawy': '8',
+        'dzielnica': '8',
+        'delegatury w miastach: Kraków, Łódź, Poznań i Wrocław': '9',
+        'delegatura': '9'
+    }
+
     sentinel = RegisterSentinel()
 
     def __init__(self, link=True, unpack=True):
@@ -1089,7 +1106,7 @@ class Register(ABC):
             root_names=root_names, indexes=indexes, link=link
         ))
 
-    row = index
+    get_row = index
 
     def transfer(self, target: Union[str, type], **other) -> "Register":
         global transfer_collector
@@ -1136,10 +1153,13 @@ class ResultFrameWrapper(object):
         except AttributeError:
             return getattr(self.frame, item)
 
-    def row(self, number, link=True):
-        dataframe = self.frame.iloc[number]
+    def get_row(self, number, link=True):
+        dataframe = self.frame.reset_index()
+        dataframe = dataframe.loc[dataframe["level_0"] == number]
+        dataframe = dataframe.drop(columns=["level_0"])
         return (lambda: dataframe,
-                lambda: self.reg.__class__().unpack_row(dataframe)
+                lambda: self.reg.__class__().unpack_row
+                (dataframe=dataframe)
                 )[link]()
 
     def to_dict(
@@ -1169,9 +1189,9 @@ class ResultFrameWrapper(object):
         """
         frame = self.frame.copy()
         new_dict = {}
-        for value_space in self.value_spaces:
+        for value_space in self.reg.value_spaces:
             value = [*self.to_list(value_space, link=link)]
-            name = (value_space, self.value_spaces[value_space])[root_names]
+            name = (value_space, self.reg.value_spaces[value_space])[root_names]
             new_dict.update(
                 {name: value[0] if len(value) == 1 else value}
             )
@@ -1220,15 +1240,15 @@ class ResultFrameWrapper(object):
         list
         """
         dataframe = self.frame
-        value_space = self.ensure_value_space(value_space)
+        value_space = self.reg.ensure_value_space(value_space)
         require(
-            value_space in self.value_spaces,
+            value_space in self.reg.value_spaces,
             f'{value_space!r} is not a valid value space.'
             f' Available value spaces: '
-            f'{", ".join(sorted(self.value_spaces.keys()))}'
+            f'{", ".join(sorted(self.reg.value_spaces.keys()))}'
         )
-        new_list = getattr(dataframe, self.value_spaces[value_space]).tolist()
-        if link and self.link_manager.has_lm(value_space):
+        new_list = getattr(dataframe, self.reg.value_spaces[value_space]).tolist()
+        if link and self.reg.link_manager.has_lm(value_space):
             for key_index in range(len(new_list)):
                 new = self.reg.__class__()
                 entry = new.unpack_row(dataframe=pandas.DataFrame([
