@@ -45,22 +45,22 @@ def ensure_column(item, frame) -> Series:
             )[isinstance(item, Series)]()
 
 
-def subsequent(unbound_priority_method) -> type(lambda: None):
+def set_sentinel(bound_priority_method) -> type(lambda: None):
     """
     Precede the function to be decorated with another function,
     e.g. to check the arguments given to the function.
     """
     def wrapper(sub):
         @wraps(sub)
-        def inner_wrapper(instance, *args, **kwargs):
-            unbound_priority_method(instance, args, kwargs)
-            return sub(instance, *args, **kwargs)
+        def inner_wrapper(self, *args, **kwargs):
+            bound_priority_method(self, args, kwargs)
+            return sub(self, *args, **kwargs)
 
         return inner_wrapper
     return wrapper
 
 
-class CaseFoldedSetLikeTuple(tuple):
+class StringCaseFoldedSetLikeTuple(tuple):
     """
     A tuple that behaves as if reduced to set consisting only of
     casefolded values.
@@ -75,7 +75,7 @@ class CaseFoldedSetLikeTuple(tuple):
         return self.casefold().count(__value)
 
     def __contains__(self, item):
-        return item in self.casefold()
+        return item.casefold() in self.casefold()
 
 
 class FrameQuestioner(object):

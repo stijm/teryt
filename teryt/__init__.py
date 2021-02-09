@@ -15,6 +15,7 @@ from .core import (
     error_types,
     FrameLinkManagers,
     FrameQuestioner,
+    index_,
     Link,
     link_types,
     Locality,
