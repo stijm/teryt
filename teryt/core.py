@@ -370,8 +370,8 @@ class GenericLinkManager(object):
                         value_space + '_linkmanager').items()))[value]
 
         if value_space == 'integral_id':  # special case
-            new: Register = simc()
-            integral: Locality = new.search("integral_id")
+            new = simc()
+            integral = new.search("integral_id")
             return integral
 
         unit_linkmanager = terc()
@@ -949,30 +949,42 @@ class Register(ABC):
         ----------------
         secname : str
             Second name of a street (ULIC).
+
         date : str
             State as of the date (all systems).
+
         name : str
             Name of the searched locality, street or unit (all systems).
+
         loctype : str
             Locality type (SIMC).
+
         gmina : str
-            Gmina ()
+            Gmina of the searched locality, street or unit (all systems).
+
         voivodship : str
-            voivodship
+            Voivodship of the searched locality, street or unit (all systems).
+
         function : str
-            function
+            Unit function (TERC).
+
         streettype : str
-            streettype
+            Street type (ULIC).
+
         powiat : str
-            powiat
-        cnowner : str
-            cnowner
+            Voivodship of the searched locality, street or unit (all systems).
+
+        cnowner : bool
+            Whether a locality owns a common name (SIMC).
+
         id : str
-            id
+            ID of a locality/street (SIMC, ULIC).
+
         integral_id : str
-            integral_id
+            Integral ID of a locality/street (SIMC, ULIC).
+
         gmitype : str
-            gmitype
+            Gmina type of the searched locality, street or unit (all systems).
 
         Examples
         --------
@@ -985,14 +997,12 @@ class Register(ABC):
         1  76796  24  10  03        2  00  1  Poznań  0217047  0216993  2021-01-01
         2  95778  30  64  01        1  96  1  Poznań  0969400  0969400  2021-01-01
 
-        >>> s.search(s.to_keywords)
-
         Returns
         -------
         Entry
             If one most accurate entry was found.
 
-        Search
+        Register
             If there were many results.
 
         """
@@ -1031,7 +1041,7 @@ class Register(ABC):
         1   5699  04  04  03        2  00  1  Warszawa  0845000  0844991  2021-01-01
         2   5975  04  14  07        2  00  1  Warszawa  0093444  0093438  2021-01-01
 
-        >>> warsaw.to_list("sym")
+        >>> warsaw.to_list("sym")  # equivalent to warsaw.to_list("id")
         ['1030760', '0845000', '0093444']
 
         >>> warsaw.to_list("powiat")  # equivalent to warsaw.to_list("pow")
