@@ -4,6 +4,13 @@
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
+# =========================
+# Future features:
+# - Register.filter
+# - Register.to_xml
+# - Register.results.to_xml
+# =========================
+
 import dataclasses
 import pandas
 import typing
