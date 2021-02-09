@@ -19,7 +19,7 @@ from .data.manager import (
 from .tools import (
     require,
     set_sentinel,
-    StringCaseFoldedSetLikeTuple,
+    StringCaseFoldTuple,
     FrameQuestioner
 )
 from .exceptions import (
@@ -31,7 +31,7 @@ from .exceptions import (
     UnpackError,
 )
 
-systems = StringCaseFoldedSetLikeTuple(('simc', 'terc', 'ulic'))
+systems = StringCaseFoldTuple(('simc', 'terc', 'ulic'))
 transfer_collector = {}
 
 
@@ -73,7 +73,7 @@ class Link(object):
 
 @dataclasses.dataclass(frozen=True)
 class UnitLink(Link):
-    """ Link to a unit. """
+    """ Link to Unit. """
     index: int
 
     @property
@@ -87,7 +87,7 @@ class UnitLink(Link):
 
 @dataclasses.dataclass(frozen=True)
 class LocalityLink(Link):
-    """ Link to a locality. """
+    """ Link to Locality. """
     index: int
 
     @property
@@ -100,10 +100,7 @@ class LocalityLink(Link):
 
 
 class Search(object):
-    """
-    TERYT searching algorithm class.
-    """
-
+    """ TERYT searching algorithm class. """
     def __init__(
             self,
             *,
@@ -116,6 +113,7 @@ class Search(object):
             by_prefix: typing.Iterable,
             locname: str = '',
     ):
+        """ Constructor. """
         self.dataframe = dataframe
         self.candidate = self.dataframe[:]
         self.frames = [self.candidate]
@@ -130,6 +128,7 @@ class Search(object):
         self.by_prefix = by_prefix
 
     def failure(self):
+        """ Was anything found? """
         return self.candidate.empty or self.candidate.equals(self.dataframe)
 
     def shuffle(self):
@@ -144,6 +143,7 @@ class Search(object):
         return self.search_keywords
 
     def search(self, search_keywords) -> "pandas.DataFrame":
+        # TODO: no shuffling by itself, it should be itertools.product.
         self.search_keywords = search_keywords
 
         def locname_search():
@@ -227,16 +227,17 @@ class GenericLinkManagerSentinel(object):
     def link(klass, arguments, _kwargs):
         if arguments:
             value_space = next(iter(arguments[:]))
-            require(
-                klass.has_lm(value_space),
-                f'value space {value_space!r}'
-                f' does not have a name-ID link'
-            )
-    
+            if value_space != 'integral':
+                require(
+                    klass.has_lm(value_space),
+                    f'value space {value_space!r}'
+                    f' does not have a name-ID link'
+                )
+
     def link_names(self, klass, _args, keywords):
         expected_kw = sorted(klass.klass.value_spaces.keys())
         # self.__init__()
-        
+
         for keyword in list(set(keywords)):
             if keyword in expected_kw:
                 e = klass.erroneous_argument
@@ -247,28 +248,28 @@ class GenericLinkManagerSentinel(object):
                 self.linkable_args.update({name: value})
                 continue
             elif klass.has_dict_lm(name):
-                linkmanager = getattr(self, name + '_linkmanager')
-                if value not in linkmanager:
+                link_manager = getattr(klass, name + '_link_manager')
+                if value not in link_manager:
                     e = f'{value!r} is not a valid ' \
                         f'{name.replace("_", " ")!r} non-ID value'
                     raise ValueError(e)
-                value = linkmanager[value]
+                value = link_manager[value]
             self.unlinkable_args.update({name: value})
 
 
 @dataclasses.dataclass(init=False)
 class GenericLinkManager(object):
     klass: "Register"
-    dict_linkmanagers: "DictLinkManagers"
-    frame_linkmanagers: "FrameLinkManagers"
+    dict_link_managers: "DictLinkManagers"
+    frame_link_managers: "FrameLinkManagers"
     cache: dict
 
     sentinel = GenericLinkManagerSentinel()
 
-    def __init__(self, klass, dict_linkmanagers, frame_linkmanagers, cache):
+    def __init__(self, klass, dict_link_managers, frame_link_managers, cache):
         self.klass = klass
-        self.dict_linkmanagers = dict_linkmanagers
-        self.frame_linkmanagers = frame_linkmanagers
+        self.dict_link_managers = dict_link_managers
+        self.frame_link_managers = frame_link_managers
         self.cache = cache
         self.store = self.cache.update
         self.link_indexes = {}
@@ -289,9 +290,10 @@ class GenericLinkManager(object):
                 value = value.upper()
 
             frame_lmname = value_space + 's'
-            frame_linkmanager = getattr(self.frame_linkmanagers, frame_lmname)
+            frame_link_manager = getattr(self.frame_link_managers,
+                                         frame_lmname)
 
-            if frame_linkmanager.empty:
+            if frame_link_manager.empty:
                 warn(
                     f'no name-ID links available for {frame_lmname}. '
                     f'Updating search keywords with the provided value, '
@@ -302,7 +304,7 @@ class GenericLinkManager(object):
                 continue
 
             entry = Search(
-                dataframe=frame_linkmanager,
+                dataframe=frame_link_manager,
                 field_name="terc",
                 search_mode="equal",
                 value_spaces=terc.value_spaces,
@@ -332,10 +334,10 @@ class GenericLinkManager(object):
         return dict(**extract, **unlinkable)
 
     def has_dict_lm(self, value_space: str) -> "bool":
-        return hasattr(self.dict_linkmanagers, value_space + '_linkmanager')
+        return hasattr(self.dict_link_managers, value_space + '_link_manager')
 
     def has_frame_lm(self, value_space: str) -> "bool":
-        return hasattr(self.frame_linkmanagers, value_space + 's')
+        return hasattr(self.frame_link_managers, value_space + 's')
 
     def has_lm(self, value_space: str) -> "bool":
         return self.has_dict_lm(
@@ -366,16 +368,16 @@ class GenericLinkManager(object):
         if self.has_dict_lm(value_space):
             return dict(map(
                 lambda pair: (pair[1], pair[0]),
-                getattr(self.dict_linkmanagers, 
-                        value_space + '_linkmanager').items()))[value]
+                getattr(self.dict_link_managers, value_space + '_link_manager'
+                        ).items()))[value]
 
-        if value_space == 'integral_id':  # special case
+        if value_space == 'integral':  # special case
             new = simc()
-            integral = new.search("integral_id")
+            integral = (lambda: new.search(integral_id=value))
             return integral
 
-        unit_linkmanager = terc()
-        
+        unit_link_manager = terc()
+
         if value_space not in self.klass.link_spaces or str(value) == 'nan':
             return ''
 
@@ -399,17 +401,17 @@ class GenericLinkManager(object):
             return self.cache[tuple(keywords.items())]
 
         result = Search(
-            dataframe=unit_linkmanager.field,
-            field_name=unit_linkmanager.system,
+            dataframe=unit_link_manager.field,
+            field_name=unit_link_manager.system,
             search_mode='no_locname',
-            value_spaces=unit_linkmanager.value_spaces,
+            value_spaces=unit_link_manager.value_spaces,
             case=False,
-            by_possession=unit_linkmanager.by_possession,
-            by_prefix=unit_linkmanager.by_prefix,
+            by_possession=unit_link_manager.by_possession,
+            by_prefix=unit_link_manager.by_prefix,
         )(search_keywords=keywords)
 
         name = result.iat[
-            0, result.columns.get_loc(unit_linkmanager.value_spaces["name"])
+            0, result.columns.get_loc(unit_link_manager.value_spaces["name"])
         ]
         self.link_indexes[value_space] = result.iat[0, 0]
         self.store({tuple(keywords.items()): name})
@@ -420,9 +422,9 @@ class GenericLinkManager(object):
             return object.__getattribute__(self, item)
         except AttributeError:
             if item.endswith("s"):
-                return getattr(self.frame_linkmanagers, item)
-            elif item.endswith("_linkmanager"):
-                return getattr(self.dict_linkmanagers, item)
+                return getattr(self.frame_link_managers, item)
+            elif item.endswith("_link_manager"):
+                return getattr(self.dict_link_managers, item)
             raise
 
 
@@ -431,17 +433,17 @@ class RegisterSentinel(object):
     def search(klass, arguments, keywords):
         if len(arguments) == 1:
             keyword = next(iter(arguments[:]))
-            
+
             if not isinstance(keyword, str):
                 raise TypeError(
                     f"name must be str, not {keyword.__class__.__name__}")
             if "name" in keywords:
                 raise ValueError(
                     "passed multiple values for 'name' parameter")
-            
+
             keywords["name"] = keyword
             arguments = ()
-        
+
         if arguments:
             raise ValueError(
                 'cannot perform searching: '
@@ -484,7 +486,7 @@ class RegisterSentinel(object):
                             (' and '.join(map('%s'.__mod__, conflicted))))
                     conflict.append(keyword)
 
-        klass.locname_value_space, klass.force_unpack = None, True
+        klass.locname_value_space, klass.force_unpack = None, False
         modes = klass.locname_keywords + ('no_locname',)
         klass.search_mode = modes[-1]
 
@@ -498,7 +500,7 @@ class RegisterSentinel(object):
         klass.raise_for_failure = keywords.pop('raise_for_failure', False)
         klass.unpack = keywords.pop('unpack', klass.unpack)
         klass._link = keywords.pop('link', True)
-        klass.force_unpack = keywords.pop('force_unpack', klass.force_unpack)
+        klass.force_unpack = keywords.pop('force_unpack', False)
         klass.unpacked = keywords.pop('unpacked', False)
         klass.case = keywords.pop('case', False)
         terid = keywords.pop('terid', '')
@@ -564,23 +566,21 @@ class RegisterSentinel(object):
 
 class DictLinkManagers(object):
     def __init__(self, register):
-        for attr in filter(lambda a: a.endswith("linkmanager"), dir(register)):
+        for attr in filter(
+                lambda a: a.endswith("link_manager"), dir(register)):
             setattr(self, attr, getattr(register, attr))
 
 
 class FrameLinkManagers(object):
     def __init__(self):
-        omitter = dict(unpack=False, unpacked=True)
-        self.manager = terc(link_manager=False)
-        self.voivodships = self.manager.search(
-            function='województwo',
-            **omitter
-        ).results
-        self.powiats = self.manager.search(function='powiat', **omitter).results
-        self.gminas = self.manager.search(function='gmina', **omitter).results
+        o = dict(unpack=False, unpacked=True)
+        self.m = terc(link=False)
+        self.voivodships = self.m.search(function='województwo', **o).results
+        self.powiats = self.m.search(function='powiat', **o).results
+        self.gminas = self.m.search(function='gmina', **o).results
 
     def __repr__(self):
-        return f"FrameLinkManagers({self.manager!r})"
+        return f"FrameLinkManagers({self.m!r})"
 
 
 class Register(ABC):
@@ -619,7 +619,19 @@ class Register(ABC):
 
     sentinel = RegisterSentinel()
 
-    def __init__(self, link_manager=True, link=True):
+    def __init__(self, link=True, unpack=True):
+        """
+        Constructor.
+
+        Parameters
+        ----------
+        link : bool
+            Whether to link the values in
+            search/converting to list/converting to dict.
+
+        unpack : bool
+            Whether to unpack future results/processed rows.
+        """
         self.simc = simc_data
         self.terc = terc_data
         self.ulic = ulic_data
@@ -644,7 +656,7 @@ class Register(ABC):
         self.force_unpack = None
         self.locname_value_space = None
         self.valid_keywords = None
-        self.unpack = None
+        self.unpack = unpack
         self.search_keywords = None
         self._search_keywords = None
         self.search_mode = None
@@ -659,10 +671,10 @@ class Register(ABC):
         self.row = pandas.DataFrame()
         self.cache = {}
         self.store = self.cache.update
-        if link_manager:
+        if link:
             self.link_manager = GenericLinkManager(
-                dict_linkmanagers=DictLinkManagers(self),
-                frame_linkmanagers=Register.frame_linkmanagers,
+                dict_link_managers=DictLinkManagers(self),
+                frame_link_managers=Register.frame_link_managers,
                 cache=self.cache,
                 klass=self
             )
@@ -709,23 +721,18 @@ class Register(ABC):
     def __getitem__(self, item):
         return dict(self)[item]
 
-    def __del__(self):
-        # self.__init__()
-        # -1073741571 (0xC00000FD)
-        pass
-
     def _dispatcher(self):
         if self._failure():
             not_found_exctype = error_types[self.system.lower()]
             if self.raise_for_failure:
                 raise not_found_exctype('no results found')
-            self.__del__()
+            self.__init__()
         else:
             self.results_found = True
-            self._results = ResultFrameWrapper(self, self._candidate.reset_index())
+            self._results = ResultFrameWrapper(
+                self, self._candidate.reset_index())
             self._results.frame = self._results.frame.drop(columns=["level_0"])
-            if (len(self._candidate
-                    ) == 1 or self.force_unpack) and self.unpack:
+            if (len(self._results) == 1 or self.force_unpack) and self.unpack:
                 return self.unpack_row()
         return self
 
@@ -861,29 +868,30 @@ class Register(ABC):
             f' is expected to be maximally {max_length}'
         index = 0
 
-        for linkmanager_value_space, proper_length in self.link_spaces.items():
+        for link_manager_value_space, proper_length in self.link_spaces.items():
             if index >= len(teritorial_id) - 1:
                 break
             frames.update(
-                {linkmanager_value_space: getattr(
-                    self.link_manager, linkmanager_value_space + 's'
+                {link_manager_value_space: getattr(
+                    self.link_manager, link_manager_value_space + 's'
                 )}
             )
             chunk = teritorial_id[index:index + proper_length]
             unpack = self.unpack
             if errors:
-                checker = type(self)().search(unpacked=True, unpack=False,
-                                              **{linkmanager_value_space: chunk})
+                checker = type(self)().search(
+                    unpacked=True, unpack=False,
+                    **{link_manager_value_space: chunk})
                 if checker.results.empty:
                     raise ValueError(
                         repr(chunk) +
                         f'is an incorrect teritorial code chunk '
-                        f'(error at {linkmanager_value_space!r} value space'
+                        f'(error at {link_manager_value_space!r} value space'
                         f', column '
-                        f'{self.value_spaces[linkmanager_value_space]!r})'
+                        f'{self.value_spaces[link_manager_value_space]!r})'
                     )
             self.unpack = unpack
-            chunks.update({linkmanager_value_space: chunk})
+            chunks.update({link_manager_value_space: chunk})
             index += proper_length
 
         return chunks
@@ -913,13 +921,20 @@ class Register(ABC):
                 self.entry_helper[value_space] = value
                 if self.link_manager.has_lm(value_space) and self._link:
                     name = self.link_manager.link(value_space, value)
-                    index = self.link_manager.link_indexes.get(value_space, None)
+                    index = self.link_manager.link_indexes.get(
+                        value_space, None)
                     if index:
                         self.entry_helper[value_space] = UnitLink(
                             id=value, name=name, index=index)
                     else:
                         self.entry_helper[value_space] = Link(
                             id=value, name=name)
+
+        # TODO: move this somewhere else…
+        if "integral_id" in self.entry_helper:
+            self.entry_helper[
+                'integral_lambda'] = self.link_manager.link(
+                "integral", self.entry_helper['integral_id'])
 
         self.entry_helper['terid'] = self.pack_terid(**self.entry_helper)
         self.unpacked = True
@@ -986,6 +1001,9 @@ class Register(ABC):
         gmitype : str
             Gmina type of the searched locality, street or unit (all systems).
 
+        Column names as the above listed arguments are also acceptable.
+        It means, you can pass "woj=value" instead of "voivodship=value".
+
         Examples
         --------
         >>> s = simc()
@@ -1006,6 +1024,10 @@ class Register(ABC):
             If there were many results.
 
         """
+        #
+        # TODO: Unit, Locality and Street objects should be also legal
+        #       as search keywords. (09-02-2021)
+        #
         self._candidate = Search(
             dataframe=self.field,
             field_name=self.system,
@@ -1018,7 +1040,148 @@ class Register(ABC):
         )(search_keywords=self.search_keywords)
         return self._dispatcher()
 
-    def to_list(self, value_space: str, link: bool = True) -> list:  # noqa
+    def to_list(self, value_space: str, link: bool = True) -> "list":
+        """
+        Return list of all values in :value space: in the field.
+
+        Parameters
+        ----------
+        value_space : str
+            Value space to retrieve values of.
+
+        link : bool
+            Whether to link the linkable values. Defaults to True.
+
+        Returns
+        -------
+        list
+        """
+        return list(ResultFrameWrapper(self, frame=self.field).to_list(
+            value_space=value_space, link=link
+        ))
+
+    def to_dict(
+            self,
+            link: bool = True,
+            root_names=False,
+            indexes: bool = True
+    ) -> "dict":
+        """
+        Return all values in a system as a dict.
+
+        Parameters
+        ----------
+        indexes : bool
+            Whether to return a dict with indexes.
+
+        root_names : bool
+            Whether to leave the database's column names or apply
+            the value spaces names.
+
+        link : bool
+            Whether to link the linkable values. Defaults to True.
+
+        Returns
+        -------
+        dict
+        """
+        return dict(ResultFrameWrapper(self, frame=self.field).to_dict(
+            root_names=root_names, indexes=indexes, link=link
+        ))
+
+    row = index
+
+    def transfer(self, target: Union[str, type], **other) -> "Register":
+        global transfer_collector
+        keywords, transfer_target = self.to_keywords(target)
+        name = keywords['name']
+        pop = transfer_collector.pop(name, ())
+        transfer_collector[name] = pop + (
+            self,
+            transfer_target.search(
+                **{**{vs: v for vs, v in other.items()
+                      if any(
+                        [vs in transfer_target.value_spaces,
+                         vs in getattr(
+                             transfer_target, 'bool_and_str_arguments')]
+                    )}, **keywords}
+            ))
+        return transfer_collector[name][-1]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_val:
+            raise
+
+
+class ResultFrameWrapper(object):
+    def __init__(self, reg, frame=pandas.DataFrame()):
+        self.reg = reg
+        self.frame = frame
+
+    def __repr__(self):
+        return repr(self.frame)
+
+    def __len__(self):
+        return len(self.frame)
+
+    def __contains__(self, item):
+        return self.frame.__contains__(item)
+
+    def __getattribute__(self, item):
+        try:
+            return object.__getattribute__(self, item)
+        except AttributeError:
+            return getattr(self.frame, item)
+
+    def row(self, number, link=True):
+        dataframe = self.frame.iloc[number]
+        return (lambda: dataframe,
+                lambda: self.reg.__class__().unpack_row(dataframe)
+                )[link]()
+
+    def to_dict(
+            self,
+            link: bool = True,
+            root_names=False,
+            indexes: bool = True
+    ) -> "dict":
+        """
+        Return dict of all values in search results.
+
+        Parameters
+        ----------
+        indexes : bool
+            Whether to return a dict with indexes.
+
+        root_names : bool
+            Whether to leave the database's column names or apply
+            the value spaces names.
+
+        link : bool
+            Whether to link the linkable values. Defaults to True.
+
+        Returns
+        -------
+        dict
+        """
+        frame = self.frame.copy()
+        new_dict = {}
+        for value_space in self.value_spaces:
+            value = [*self.to_list(value_space, link=link)]
+            name = (value_space, self.value_spaces[value_space])[root_names]
+            new_dict.update(
+                {name: value[0] if len(value) == 1 else value}
+            )
+        if indexes:
+            new_dict["index"] = [*range(0, len(frame))]
+        return new_dict
+
+    todict = to_dict
+
+    def to_list(self, value_space: str, link: bool = True) -> "list":
         """
         Return list of all values in :value space:.
 
@@ -1032,7 +1195,7 @@ class Register(ABC):
 
         Examples
         --------
-        >>> warsaw = simc().search("Warszawa", gmitype="wiejska", woj="kujawsko-pomorskie")  # noqa
+        >>> warsaw = simc().search("Warszawa", gmitype="wiejska", woj="kujawsko-pomorskie")
         >>> warsaw
         SIMC()
         Results:
@@ -1056,10 +1219,7 @@ class Register(ABC):
         -------
         list
         """
-        dataframe = (
-            self.field.copy(),
-            ((self.results, {})[self.results is None]).copy(),
-        )[self.results_found]
+        dataframe = self.frame
         value_space = self.ensure_value_space(value_space)
         require(
             value_space in self.value_spaces,
@@ -1070,68 +1230,13 @@ class Register(ABC):
         new_list = getattr(dataframe, self.value_spaces[value_space]).tolist()
         if link and self.link_manager.has_lm(value_space):
             for key_index in range(len(new_list)):
-                new = self.__class__()
+                new = self.reg.__class__()
                 entry = new.unpack_row(dataframe=pandas.DataFrame([
                     dataframe.loc[dataframe.index[key_index]]
                 ]))
                 new_list[key_index] = getattr(entry, value_space)
 
         return new_list
-
-    def to_dict(self, link: bool = True) -> "dict":  # noqa
-        results = self.results.copy()
-        new_dict = {}
-        for value_space in self.value_spaces:
-            value = [*self.to_list(value_space, link=link)]
-            new_dict.update(
-                {value_space: value[0] if len(value) == 1 else value}
-            )
-        self.__init__()
-        self._results = results
-        return new_dict
-
-    def transfer(self, target: Union[str, type], **other) -> "Register":
-        global transfer_collector
-        keywords, transfer_target = self.to_keywords(target)
-        name = keywords['name']
-        pop = transfer_collector.pop(name, ())
-        transfer_collector[name] = pop + (
-            self,
-            transfer_target.search(
-                **{**{vs: v for vs, v in other.items()
-                      if any(
-                        [vs in transfer_target.value_spaces,
-                         vs in getattr(transfer_target, 'bool_and_str_arguments')]
-                    )}, **keywords}
-            ))
-        return transfer_collector[name][-1]
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_val:
-            raise
-
-
-class ResultFrameWrapper(object):
-    def __init__(self, reg, frame=pandas.DataFrame()):
-        self.reg = reg
-        self.frame = frame
-
-    def __repr__(self):
-        return repr(self.frame)
-
-    def __getattribute__(self, item):
-        try:
-            return object.__getattribute__(self, item)
-        except AttributeError:
-            return getattr(self.frame, item)
-
-    def row(self, number, link=True):
-        dataframe = self.frame[number]
-        return (lambda: dataframe,
-                lambda: self.reg.__class__.unpack_row(dataframe))[link]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1149,7 +1254,7 @@ class Entry(object):
     secname: str = None
     function: str = None
     id: str = None
-    integral: str = None
+    integral_lambda: type(lambda: None) = (lambda: None)
     integral_id: str = None
     row: pandas.DataFrame = None
     date: str = None
@@ -1158,6 +1263,10 @@ class Entry(object):
     @property
     def is_entry(self):
         return True
+
+    @property
+    def integral(self):
+        return self.integral_lambda()
 
     def __getattribute__(self, item):
         # Register is mutable;
@@ -1200,6 +1309,7 @@ class Entry(object):
 
 
 class Unit(Entry):
+    """ TERC entry. """
     type = "Unit"
 
     @property
@@ -1208,6 +1318,7 @@ class Unit(Entry):
 
 
 class Locality(Entry):
+    """ SIMC entry. """
     type = "Locality"
 
     @property
@@ -1216,6 +1327,7 @@ class Locality(Entry):
 
 
 class Street(Entry):
+    """ ULIC entry. """
     type = "Street"
 
     @property
@@ -1260,13 +1372,13 @@ class SIMC(Register):
         'gmina': 2,
         'gmitype': 1
     }
-    cnowner_linkmanager = {
+    cnowner_link_manager = {
         True: '1',
         False: '0'
     }
 
     # This is WMRODZ, in a dict…
-    loctype_linkmanager = {
+    loctype_link_manager = {
         'miasto': '96',
         'delegatura': '98',
         'dzielnica m. st. Warszawy': '95',
@@ -1296,7 +1408,7 @@ class TERC(Register):
         'voivodship': 2,
         'powiat': 2,
         'gmina': 2,
-        'gmitype': 1
+        'gmitype': 1,
     }
 
 
@@ -1321,7 +1433,7 @@ class ULIC(Register):
     }
 
 
-inst = None
+most_recent = None
 """ Most recent instance. """
 
 
@@ -1330,26 +1442,26 @@ def make_recent(sys,
                                "TERYT system name, "
                                "instance or type; "
                                "no proper was found/provided")):
-    global inst
+    global most_recent
     if sys is None:
-        if inst is None:
+        if most_recent is None:
             raise err
     elif isinstance(sys, str) and sys in systems:
-        inst = eval(sys)()
+        most_recent = eval(sys)()
     elif isinstance(sys, type):
         if not issubclass(sys, Register):
             raise err
-        inst = sys()
+        most_recent = sys()
     elif isinstance(sys, Register):
-        inst = sys.__class__()
+        most_recent = sys.__class__()
     else:
         raise err
-    return inst
+    return most_recent
 
 
 def reset_recent():
-    global inst
-    inst = None
+    global most_recent
+    most_recent = None
 
 
 def search(name=None, *, system=None, **keywords):
@@ -1358,7 +1470,7 @@ def search(name=None, *, system=None, **keywords):
     return make_recent(system).search(**keywords)
 
 
-def index_(i, system=None, **params):
+def sys_index(i, system=None, **params):
     return make_recent(system).index(i, **params)
 
 
@@ -1384,7 +1496,7 @@ def ensure_value_space(column_name, system=None):
 
 
 search.__doc__ = Register.search.__doc__
-index_.__doc__ = Register.index.__doc__
+sys_index.__doc__ = Register.index.__doc__
 transfer.__doc__ = Register.transfer.__doc__
 to_list.__doc__ = Register.to_list.__doc__
 to_dict.__doc__ = Register.to_dict.__doc__
@@ -1394,4 +1506,4 @@ terc = Terc = TERC
 simc = Simc = SIMC
 ulic = Ulic = ULIC
 
-Register.frame_linkmanagers = FrameLinkManagers()
+Register.frame_link_managers = FrameLinkManagers()

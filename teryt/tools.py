@@ -4,9 +4,9 @@
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
-from pandas import (
+from pandas import (  # noqa: F401
     Series,
-    DataFrame  # noqa: F401
+    DataFrame
 )
 from typing import Any
 from re import escape
@@ -60,10 +60,12 @@ def set_sentinel(bound_priority_method) -> type(lambda: None):
     return wrapper
 
 
-class StringCaseFoldedSetLikeTuple(tuple):
+class StringCaseFoldTuple(tuple):
     """
-    A tuple that behaves as if reduced to set consisting only of
-    casefolded values.
+    A tuple that behaves as if reduced to set and converted to tuple
+    consisting of casefolded strings only.
+
+    It cannot contain a non-string value.
     """
     def casefold(self):
         return tuple(set(map(str.casefold, self)))
