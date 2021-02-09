@@ -649,7 +649,7 @@ class Register(ABC):
         self._search_keywords = None
         self.search_mode = None
         self.raise_for_failure = None
-        self._link = True
+        self._link = link
         self.results_found = False
         self.unpacked = False
         self.linked = False
@@ -802,7 +802,7 @@ class Register(ABC):
         Entry
         """
         dataframe = self.field.loc[self.field["index"] == int(i)]
-        return self.unpack_row(dataframe=dataframe)
+        return self.unpack_row(dataframe=dataframe, link=link)
 
     @property
     def is_entry(self):
@@ -889,7 +889,7 @@ class Register(ABC):
         return chunks
 
     @set_sentinel(sentinel.unpack_row)
-    def unpack_row(self, *, dataframe: pandas.DataFrame = None) -> "Entry":  # noqa
+    def unpack_row(self, *, dataframe: pandas.DataFrame = None, link=True) -> "Entry":  # noqa
         """
         Unpack one-row DataFrame to Entry instance.
 
@@ -902,6 +902,7 @@ class Register(ABC):
         -------
         Entry
         """
+        self._link = link
 
         for value_space, colname in self.value_spaces.items():
             value = self.row.iat[
@@ -1068,7 +1069,7 @@ class Register(ABC):
         return new_list
 
     def to_dict(self, link: bool = True) -> "dict":  # noqa
-        results = self.results[:]
+        results = self.results.copy()
         new_dict = {}
         for value_space in self.value_spaces:
             value = [*self.to_list(value_space, link=link)]
