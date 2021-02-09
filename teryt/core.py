@@ -1106,7 +1106,7 @@ class Register(ABC):
             root_names=root_names, indexes=indexes, link=link
         ))
 
-    get_row = index
+    get_entry = index
 
     def transfer(self, target: Union[str, type], **other) -> "Register":
         global transfer_collector
@@ -1153,7 +1153,7 @@ class ResultFrameWrapper(object):
         except AttributeError:
             return getattr(self.frame, item)
 
-    def get_row(self, number, link=True):
+    def get_entry(self, number, link=True):
         dataframe = self.frame.reset_index()
         dataframe = dataframe.loc[dataframe["level_0"] == number]
         dataframe = dataframe.drop(columns=["level_0"])
