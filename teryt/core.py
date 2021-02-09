@@ -585,13 +585,13 @@ class DictLinkManagers(object):
 class FrameLinkManagers(object):
     def __init__(self):
         o = dict(unpack=False, unpacked=True)
-        self.m = terc(link=False)
-        self.voivodships = self.m.search(function='województwo', **o).results
-        self.powiats = self.m.search(function='powiat', **o).results
-        self.gminas = self.m.search(function='gmina', **o).results
+        self._m = terc(link=False)
+        self.voivodships = self._m.search(function='województwo', **o).results
+        self.powiats = self._m.search(function='powiat', **o).results
+        self.gminas = self._m.search(function='gmina', **o).results
 
     def __repr__(self):
-        return f"FrameLinkManagers({self.m!r})"
+        return f"FrameLinkManagers({self._m!r})"
 
 
 class Register(ABC):
@@ -1241,9 +1241,9 @@ class ResultFrameWrapper(object):
         ['1030760', '0845000', '0093444']
 
         >>> warsaw.results.to_list("powiat")  # equivalent to_list("pow")
-        [UnitLink(id='14', name='świecki', index=469),
-         UnitLink(id='04', name='chełmiński', index=358),
-         UnitLink(id='14', name='świecki', index=469)]
+        [UnitLink(code='14', name='świecki', index=469),
+         UnitLink(code='04', name='chełmiński', index=358),
+         UnitLink(code='14', name='świecki', index=469)]
 
         >>> warsaw.results.to_list("pow", link=False)
         ['14', '04', '14']
