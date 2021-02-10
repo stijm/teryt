@@ -64,7 +64,7 @@ class Link(object):
         return str(self.code or '')
 
     def __add__(self, other):
-        return (str(self.code) + other) if self else ('' + other)
+        return (str(self.code or '') + other)
 
     def __bool__(self):
         return all([self.name, self.code])
@@ -767,7 +767,7 @@ class Register(ABC):
     def _failure(self):
         return self._candidate.empty or self._candidate.equals(self.field)
 
-    @set_sentinel(RegisterSentinel.to_keywords)
+    @set_sentinel(sentinel.to_keywords)
     def to_keywords(self, _transfer_target_name: Union[str, type]):
         """
         Create and return keywords leading to current search results.
@@ -775,7 +775,7 @@ class Register(ABC):
         Parameters
         ----------
         _transfer_target_name: str or type
-            Target class (simc, terc or ulic).
+            Target class (SIMC, TERC or ULIC).
 
         Returns
         -------
@@ -1388,6 +1388,7 @@ error_types = {
 
 
 class SIMC(Register):
+    """ SIMC system. """
     value_spaces = {
         'voivodship': 'WOJ',
         'powiat': 'POW',
@@ -1429,6 +1430,7 @@ class SIMC(Register):
 
 
 class TERC(Register):
+    """ TERC system. """
     value_spaces = {
         'voivodship': 'WOJ',
         'powiat': 'POW',
@@ -1447,6 +1449,7 @@ class TERC(Register):
 
 
 class ULIC(Register):
+    """ ULIC system. """
     value_spaces = {
         'voivodship': 'WOJ',
         'powiat': 'POW',
