@@ -7,6 +7,7 @@
 # License: GNU GPLv3
 
 from .data.manager import resource_file
+from .data import implement
 
 from .core import (
     ensure_value_space,
@@ -20,7 +21,7 @@ from .core import (
     Locality,
     LocalityLink,
     Register,
-    ResultFrameWrapper,
+    Results,
     search,
     Street,
     SIMC,

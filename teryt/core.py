@@ -17,13 +17,18 @@ import typing
 from warnings import warn
 from abc import ABC
 from math import factorial
-from typing import Union
+from typing import (
+    final,
+    Union
+)
+from .data.implement import (data_implement as _data_implement)
 from .data.manager import (
     simc_data,
     terc_data,
     ulic_data
 )
 from .tools import (
+    disinherit,
     require,
     set_sentinel,
     StringCaseFoldTuple,
@@ -64,7 +69,7 @@ class Link(object):
         return str(self.code or '')
 
     def __add__(self, other):
-        return (str(self.code or '') + other)
+        return str(self).__add__(other)
 
     def __bool__(self):
         return all([self.name, self.code])
@@ -108,13 +113,14 @@ class LocalityLink(Link):
 
 class Search(object):
     """ TERYT searching algorithm class. """
+
     def __init__(
             self,
             *,
             dataframe: pandas.DataFrame,
             field_name: str,
             search_mode: str,
-            value_spaces: dict,
+            value_spaces: Union[dict, property],
             case: bool,
             by_possession: typing.Iterable,
             by_prefix: typing.Iterable,
@@ -122,7 +128,7 @@ class Search(object):
     ):
         """ Constructor. """
         self.dataframe = dataframe
-        self.candidate = self.dataframe[:]
+        self.candidate = self.dataframe.copy()
         self.frames = [self.candidate]
         self.field_name = field_name
         self.search_mode = search_mode
@@ -231,7 +237,7 @@ class GenericLinkManagerSentinel(object):
         self.unlinkable_args = {}
 
     @staticmethod
-    def link(klass, arguments, _kwargs):
+    def link(klass, arguments, _keywords):
         if arguments:
             value_space = next(iter(arguments[:]))
             if value_space != 'integral':
@@ -286,7 +292,7 @@ class GenericLinkManager(object):
         self.link_indexes = {}
 
     @set_sentinel(sentinel.link_names)
-    def link_names(self, **_kwargs):
+    def link_names(self, **_keywords):
         linkable = self.sentinel.linkable_args
         unlinkable = self.sentinel.unlinkable_args
         extract = unlinkable.copy()
@@ -466,7 +472,7 @@ class RegisterSentinel(object):
                 'no keyword arguments')
 
         search_keywords = tuple(
-           set(klass.locname_keywords + (*klass.value_spaces.keys(),))
+            set(klass.locname_keywords + (*klass.value_spaces.keys(),))
         ) + klass.optional_str_arguments
 
         keywords = dict(map(  # woj -> voivodship
@@ -529,7 +535,7 @@ class RegisterSentinel(object):
         for value_space in klass.search_keywords:
             column = klass.value_spaces[value_space]
             klass.field[column] = klass.field[
-               klass.value_spaces[value_space]
+                klass.value_spaces[value_space]
             ].map(str)
 
     @staticmethod
@@ -624,25 +630,25 @@ class Register(ABC):
         *optional_str_arguments
     )
     erroneous_argument = \
-        f'%s() got an unexpected keyword argument %r. ' \
-        f'Try looking for the proper argument name ' \
-        f'in the following list:\n{" " * 12}%s.'
+        f"%s() got an unexpected keyword argument %r. " \
+        f"Try looking for the proper argument name " \
+        f"in the following list:\n{' ' * 12}%s."
 
     gmitype_link_manager = {
-        'miejska': '1',
-        'gmina miejska': '1',
-        'wiejska': '2',
-        'gmina wiejska': '2',
-        'miejsko-wiejska': '3',
-        'gmina miejsko-wiejska': '3',
-        'miasto w gminie miejsko-wiejskiej': '4',
-        'obszar wiejski w gminie miejsko-wiejskiej': '5',
-        'dzielnice m. st. Warszawy': '8',
-        'dzielnice Warszawy': '8',
-        'dzielnica Warszawy': '8',
-        'dzielnica': '8',
-        'delegatury w miastach: Kraków, Łódź, Poznań i Wrocław': '9',
-        'delegatura': '9'
+        "miejska": "1",
+        "gmina miejska": "1",
+        "wiejska": "2",
+        "gmina wiejska": "2",
+        "miejsko-wiejska": "3",
+        "gmina miejsko-wiejska": "3",
+        "miasto w gminie miejsko-wiejskiej": "4",
+        "obszar wiejski w gminie miejsko-wiejskiej": "5",
+        "dzielnice m. st. Warszawy": "8",
+        "dzielnice Warszawy": "8",
+        "dzielnica Warszawy": "8",
+        "dzielnica": "8",
+        "delegatury w miastach: Kraków, Łódź, Poznań i Wrocław": "9",
+        "delegatura": "9"
     }
 
     sentinel = RegisterSentinel()
@@ -693,7 +699,7 @@ class Register(ABC):
         self.results_found = False
         self.unpacked = False
         self.linked = False
-        self._results = ResultFrameWrapper(self)
+        self._results = Results(self)
         self.transfer_target = None
         self.entry_helper = {}
         self.row = pandas.DataFrame()
@@ -711,6 +717,8 @@ class Register(ABC):
     def results(self):
         return self._results
 
+    r = results
+
     def __repr__(self):
         return f"{self.system.upper()}()" + \
                (f"\nResults:\n{self.results}"
@@ -726,6 +734,7 @@ class Register(ABC):
         """ Value spaces. """
         raise NotImplementedError
 
+    @final
     def unique_value_space(self, value_space):
         """
         Return if a value space is unique in comparison
@@ -749,6 +758,7 @@ class Register(ABC):
     def __getitem__(self, item):
         return dict(self)[item]
 
+    @final
     def _dispatcher(self):
         if self._failure():
             not_found_exctype = error_types[self.system.lower()]
@@ -757,13 +767,14 @@ class Register(ABC):
             self.__init__()
         else:
             self.results_found = True
-            self._results = ResultFrameWrapper(
+            self._results = Results(
                 self, self._candidate.reset_index())
             self._results.frame = self._results.frame.drop(columns=["level_0"])
             if (len(self._results) == 1 or self.force_unpack) and self.unpack:
                 return self.unpack_row()
         return self
 
+    @final
     def _failure(self):
         return self._candidate.empty or self._candidate.equals(self.field)
 
@@ -800,6 +811,7 @@ class Register(ABC):
         yield keywords
         yield transfer_target
 
+    @final
     def ensure_value_space(self, column_name):
         """
         Find :column_name: in value spaces and return it if it occurs.
@@ -974,7 +986,7 @@ class Register(ABC):
         )
 
     @set_sentinel(sentinel.search)
-    def search(self, *_args, **_kwargs) -> Union["Register", "Locality"]:
+    def search(self, *_args, **_keywords) -> Union["Register", "Locality"]:
         """
         Search for the most accurate entry using provided keywords.
 
@@ -985,7 +997,7 @@ class Register(ABC):
             Only one positional argument is accepted: as an equivalent
             to "name=" keyword parameter.
 
-        **_kwargs
+        **_keywords
             Keyword arguments.
 
         Other Parameters
@@ -1086,9 +1098,11 @@ class Register(ABC):
         -------
         list
         """
-        return list(ResultFrameWrapper(self, frame=self.field).to_list(
+        return list(Results(self, frame=self.field).to_list(
             value_space=value_space, link=link
         ))
+
+    tolist = to_list
 
     def to_dict(
             self,
@@ -1115,28 +1129,11 @@ class Register(ABC):
         -------
         dict
         """
-        return dict(ResultFrameWrapper(self, frame=self.field).to_dict(
+        return dict(Results(self, frame=self.field).to_dict(
             root_names=root_names, indexes=indexes, link=link
         ))
 
     get_entry = index
-
-    def transfer(self, target: Union[str, type], **other) -> "Register":
-        global transfer_collector
-        keywords, transfer_target = self.to_keywords(target)
-        name = keywords['name']
-        pop = transfer_collector.pop(name, ())
-        transfer_collector[name] = pop + (
-            self,
-            transfer_target.search(
-                **{**{vs: v for vs, v in other.items()
-                      if any(
-                        [vs in transfer_target.value_spaces,
-                         vs in getattr(
-                             transfer_target, 'bool_and_str_arguments')]
-                    )}, **keywords}
-            ))
-        return transfer_collector[name][-1]
 
     def __enter__(self):
         return self
@@ -1146,7 +1143,7 @@ class Register(ABC):
             raise
 
 
-class ResultFrameWrapper(object):
+class Results(object):
     def __init__(self, reg, frame=pandas.DataFrame()):
         self.reg = reg
         self.frame = frame
@@ -1256,9 +1253,9 @@ class ResultFrameWrapper(object):
         value_space = self.reg.ensure_value_space(value_space)
         require(
             value_space in self.reg.value_spaces,
-            f'{value_space!r} is not a valid value space.'
-            f' Available value spaces: '
-            f'{", ".join(sorted(self.reg.value_spaces.keys()))}'
+            f"{value_space!r} is not a valid value space."
+            f" Available value spaces: "
+            f"{', '.join(sorted(self.reg.value_spaces.keys()))}"
         )
         new_list = getattr(dataframe, self.reg.value_spaces[value_space]).tolist()
         if link and self.reg.link_manager.has_lm(value_space):
@@ -1270,6 +1267,23 @@ class ResultFrameWrapper(object):
                 new_list[key_index] = getattr(entry, value_space)
 
         return new_list
+
+    def transfer(self, target: Union[str, type], **other) -> "Register":
+        global transfer_collector
+        keywords, transfer_target = self.to_keywords(target)
+        name = keywords['name']
+        pop = transfer_collector.pop(name, ())
+        transfer_collector[name] = pop + (
+            self,
+            transfer_target.search(
+                **{**{vs: v for vs, v in other.items()
+                      if any(
+                        [vs in transfer_target.value_spaces,
+                         vs in getattr(
+                             transfer_target, 'bool_and_str_arguments')]
+                    )}, **keywords}
+            ))
+        return transfer_collector[name][-1]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1387,98 +1401,30 @@ error_types = {
 }
 
 
-class SIMC(Register):
+class SIMC(Register, ABC):
     """ SIMC system. """
-    value_spaces = {
-        'voivodship': 'WOJ',
-        'powiat': 'POW',
-        'gmina': 'GMI',
-        'gmitype': 'RODZ_GMI',
-        'loctype': 'RM',
-        'cnowner': 'MZ',
-        'name': 'NAZWA',
-        'id': 'SYM',
-        'integral_id': 'SYMPOD',
-        'date': 'STAN_NA'
-    }
-    link_spaces = {
-        'voivodship': 2,
-        'powiat': 2,
-        'gmina': 2,
-        'gmitype': 1
-    }
-    cnowner_link_manager = {
-        True: '1',
-        False: '0'
-    }
-
-    # This is WMRODZ, in a dict…
-    loctype_link_manager = {
-        'miasto': '96',
-        'delegatura': '98',
-        'dzielnica m. st. Warszawy': '95',
-        'część miasta': '99',
-        'wieś': '01',
-        'przysiółek': '03',
-        'kolonia': '02',
-        'osada': '04',
-        'osada leśna': '05',
-        'osiedle': '06',
-        'schronisko turystyczne': '07',
-        'część miejscowości': '00',
-    }
 
 
-class TERC(Register):
+class TERC(Register, ABC):
     """ TERC system. """
-    value_spaces = {
-        'voivodship': 'WOJ',
-        'powiat': 'POW',
-        'gmina': 'GMI',
-        'gmitype': 'RODZ',
-        'name': 'NAZWA',
-        'function': 'NAZWA_DOD',
-        'date': 'STAN_NA',
-    }
-    link_spaces = {
-        'voivodship': 2,
-        'powiat': 2,
-        'gmina': 2,
-        'gmitype': 1,
-    }
 
 
-class ULIC(Register):
+class ULIC(Register, ABC):
     """ ULIC system. """
-    value_spaces = {
-        'voivodship': 'WOJ',
-        'powiat': 'POW',
-        'gmina': 'GMI',
-        'gmitype': 'RODZ_GMI',
-        'integral_id': 'SYM',
-        'id': 'SYM_UL',
-        'streettype': 'CECHA',
-        'name': 'NAZWA_1',
-        'secname': 'NAZWA_2',
-        'date': 'STAN_NA'
-    }
-    link_spaces = {
-        'voivodship': 2,
-        'powiat': 2,
-        'gmina': 2,
-        'gmitype': 1
-    }
 
+
+_data_implement(SIMC, TERC, ULIC)
+disinherit(parent=ABC, klasses=[SIMC, TERC, ULIC])  # not abstract classes
 
 most_recent = None
 """ Most recent instance. """
 
 
-def make_recent(sys,
-                err=ValueError("system must be a valid "
-                               "TERYT system name, "
-                               "instance or type; "
-                               "no proper was found/provided")):
+def _make_recent(sys,
+                 err=ValueError("system must be a valid "
+                                "TERYT system name, "
+                                "instance or type; "
+                                "no proper was found/provided")):
     global most_recent
     if sys is None:
         if most_recent is None:
@@ -1501,40 +1447,62 @@ def reset_recent():
     most_recent = None
 
 
+def get_entry(number, system=None, link=True, from_results=True):
+    recent = _make_recent(system)
+    if from_results:
+        recent = recent.results
+    return recent.get_entry(number, link=link)
+
+
 def search(name=None, *, system=None, **keywords):
     if name is not None:
         keywords["name"] = name
-    return make_recent(system).search(**keywords)
+    return _make_recent(system).search(**keywords)
 
 
 def sys_index(i, system=None, **params):
-    return make_recent(system).index(i, **params)
+    return _make_recent(system).index(i, **params)
 
 
-def transfer(target, system=None, **keywords):
-    if isinstance(system, type):
-        raise TypeError("system must be a Register instance")
-    keywords = {'target': target, **keywords}
-    return make_recent(system).transfer(**keywords)
+def transfer(results, to_system=None, **keywords):
+    if isinstance(to_system, type):
+        raise TypeError("target system must be a Register instance or name, not type")
+    keywords = {'target': results.reg, **keywords}
+    recent = _make_recent(results.reg)
+    return recent.transfer(to_system, **keywords)
 
 
-def to_list(system=None, **params):
-    return make_recent(system).to_list(**params)
+def to_list(system=None, from_results=True, **params):
+    recent = _make_recent(system)
+    if from_results:
+        if recent.results:
+            recent = recent.results
+    return recent.to_list(**params)
 
 
-def to_dict(system=None, **params):
-    return make_recent(system).to_dict(**params)
+tolist = to_list
+
+
+def to_dict(system=None, from_results=True, **params):
+    recent = _make_recent(system)
+    if from_results:
+        if recent.results:
+            recent = recent.results
+    return recent.to_dict(**params)
+
+
+todict = to_dict
 
 
 def ensure_value_space(column_name, system=None):
     if isinstance(system, type):
         raise TypeError("system must be a Register instance")
-    return make_recent(system).ensure_value_space(column_name)
+    return _make_recent(system).ensure_value_space(column_name)
 
 
 search.__doc__ = Register.search.__doc__
 sys_index.__doc__ = Register.index.__doc__
-transfer.__doc__ = Register.transfer.__doc__
+transfer.__doc__ = Results.transfer.__doc__
 to_list.__doc__ = Register.to_list.__doc__
 to_dict.__doc__ = Register.to_dict.__doc__
 ensure_value_space.__doc__ = Register.ensure_value_space.__doc__

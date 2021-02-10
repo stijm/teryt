@@ -11,12 +11,9 @@ from pandas import (  # noqa: F401
 from typing import Any
 from re import escape
 from functools import wraps
-from .exceptions import (
-    Error
-)
 
 
-def require(logic, error) -> Any:
+def require(logic, error, default=ValueError) -> Any:
     """
     If: logic: is not a positive logical value,
     raise :error: or the default error using :error:
@@ -25,7 +22,7 @@ def require(logic, error) -> Any:
     if not logic:
         if issubclass(error.__class__, BaseException):
             raise error
-        raise Error(error)
+        raise default(error)
     return logic
 
 
@@ -164,3 +161,11 @@ class FrameQuestioner(object):
             if case else
             (col.str.lower().str.endswith(value.lower(), na=False))
         ]
+
+
+def disinherit(parent, klasses):
+    """ Stop class inheriting from a :parent: class. """
+    for klass in klasses:
+        bases = list(klass.__bases__)
+        bases.remove(parent)
+        klass.__bases__ = tuple(bases)
