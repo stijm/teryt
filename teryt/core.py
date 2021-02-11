@@ -6,23 +6,25 @@
 
 # Future features
 # ---------------
-# - Register.filter
-# - Register.to_xml
-# - Register.results.to_xml
+# - System.filter
+# - System.to_xml
+# - System.results.to_xml
 
 import dataclasses
-import pandas
 import re
 import typing
 from abc import ABC
-from math import factorial
 from itertools import compress
+from math import factorial
 from typing import (
     final,
     Hashable,
     Union,
 )
 from warnings import warn
+
+from pandas import DataFrame
+
 from .data.implement import (
     implement_common_data,
     implement_specific_data
@@ -55,7 +57,7 @@ transfer_collector = {}
 def transferred_searches(key):
     for transferred_search in set(transfer_collector.get(key, ())):
         name = getattr(transferred_search, 'system')
-        if isinstance(name, Register):
+        if isinstance(name, System):
             name = name.system
         yield name, transferred_search
 
@@ -65,7 +67,7 @@ class Link(object):
     """ TERYT Link. """
 
     code: str
-    name: typing.Any
+    value: typing.Any
 
     def __getitem__(self, item: (str, int)):
         return (
@@ -80,11 +82,11 @@ class Link(object):
         return str(self).__add__(other)
 
     def __bool__(self):
-        return all([self.name, self.code])
+        return all([self.value, self.code])
 
     def __iter__(self):
-        if self.name:
-            yield 'name', self.name
+        if self.value:
+            yield 'value', self.value
         yield 'code', self.code
         i = getattr(self, 'index', None)
         if i:
@@ -125,7 +127,7 @@ class Search(object):
     def __init__(
             self,
             *,
-            dataframe: pandas.DataFrame,
+            dataframe: DataFrame,
             system: str,
             search_mode: str,
             fields: Union[dict, property],
@@ -163,7 +165,7 @@ class Search(object):
         self.search_keywords = dict(zip(keys, values))
         return self.search_keywords
 
-    def search(self, search_keywords) -> "pandas.DataFrame":
+    def search(self, search_keywords) -> "DataFrame":
         # TODO: no shuffling by itself, it should be itertools.product.
         self.search_keywords = search_keywords
 
@@ -183,7 +185,7 @@ class Search(object):
         if self.search_mode != 'no_locname':
             locname_search()
             if self.failure():
-                return pandas.DataFrame()
+                return DataFrame()
 
         attempts = 0
         max_attempts = factorial(len(self.search_keywords))
@@ -197,9 +199,9 @@ class Search(object):
                 attempts += 1
                 if field not in self.fields:
                     continue
-                col = self.fields[field]
+                root = self.fields[field]
                 keyword_args = dict(
-                    col=col,
+                    col=root,
                     value=str(query),
                     case=self.case
                 )
@@ -271,8 +273,9 @@ class GenericLinkManagerSentinel(object):
             elif klass.has_dict_lm(name):
                 link_manager = getattr(klass, name + '_link_manager')
                 if value.isnumeric() and value in link_manager.values():
-                    value = dict.__call__(map(reversed, link_manager.items()))[value]
-                elif value not in link_manager:
+                    value = dict.__call__(
+                        map(reversed, link_manager.items()))[value]
+                if value not in link_manager:
                     e = f'{value!r} is not a valid ' \
                         f'{name.replace("_", " ")!r} non-ID value'
                     raise ValueError(e)
@@ -283,7 +286,7 @@ class GenericLinkManagerSentinel(object):
 
 @dataclasses.dataclass(init=False)
 class GenericLinkManager(object):
-    klass: "Register"
+    klass: "System"
     dict_link_managers: "DictLinkManagers"
     frame_link_managers: "FrameLinkManagers"
     cache: dict
@@ -310,12 +313,12 @@ class GenericLinkManager(object):
         fields = list(self.klass.fields.keys())
         for field, value in linkable.items():
             # TODO: implement a dict with all fields mappers
-            if field == 'voivodship':
+            if field == 'voivodship' and isinstance(value, str):
                 value = value.upper()
 
             frame_lmname = field + 's'
-            frame_link_manager = getattr(self.frame_link_managers,
-                                         frame_lmname)
+            frame_link_manager: DataFrame = getattr(
+                self.frame_link_managers, frame_lmname)
 
             if frame_link_manager.empty:
                 warn(
@@ -326,6 +329,9 @@ class GenericLinkManager(object):
                 )
                 unlinkable.update({field: value})
                 continue
+
+            if value.isnumeric() and value in frame_link_manager.values:
+                value = self.link(field, value)
 
             entry = Search(
                 dataframe=frame_link_manager,
@@ -338,8 +344,8 @@ class GenericLinkManager(object):
                 locname=value
             )(search_keywords=unlinkable)
 
-            require(not entry.empty,
-                    ErroneousUnitName(f"{value!r} is not a {field}"))
+            if entry.empty:
+                raise ErroneousUnitName(f"{value!r} is not a {field}")
             index = entry.iat[0, 0]
             link_result = {field: entry.iat[0, entry.columns.get_loc(
                 self.klass.fields[field]
@@ -413,6 +419,10 @@ class GenericLinkManager(object):
             quantum = fields.index(field) - 1
             for rot in range(quantum + 1):
                 prev_value = fields[quantum - rot]
+                if prev_value not in helper:
+                    raise ValueError(f"cannot link {field!r} as "
+                                     f"its overriding field {prev_value!r} "
+                                     f"is not declared")
                 keywords[prev_value] = str(helper[prev_value])
 
         keywords[field] = value
@@ -452,9 +462,11 @@ class GenericLinkManager(object):
             raise
 
 
-class RegisterSentinel(object):
+class SystemSentinel(object):
     @staticmethod
     def search(klass, arguments, keywords):
+        klass.__init__(**klass.modes)
+
         if len(arguments) == 1:
             keyword = next(iter(arguments[:]))
 
@@ -544,8 +556,11 @@ class RegisterSentinel(object):
             ].map(str)
 
     @staticmethod
-    def unpack_row(klass, _args, keywords):
-        row = keywords.pop("dataframe", klass.results)
+    def unpack_row(klass, args, keywords):
+        if len(args) == 1:
+            row = args[0]
+        else:
+            row = keywords.pop("dataframe", None)
         fields = klass.fields
         if row is None:
             raise UnpackError("nothing to unpack from")
@@ -554,8 +569,8 @@ class RegisterSentinel(object):
         if len(row) != 1:  # it's not a row then
             raise UnpackError(
                 "cannot unpack from more "
-                "than one TERYT entry "
-                f"(got {len(row)} entries)"
+                "than one TERYT row "
+                f"(got {len(row)} rows)"
             )
         for field in fields:
             if fields[field] not in row:
@@ -580,15 +595,15 @@ class FrameLinkManagers(object):
     def __init__(self):
         om = dict(unpack=False, unpacked=True)
         self._m = terc(link=False)
-        self.voivodships = self._m.search(function='województwo', **om).r
-        self.powiats = self._m.search(function='powiat', **om).r
-        self.gminas = self._m.search(function='gmina', **om).r
+        self.voivodships = self._m.search(function='województwo', **om)
+        self.powiats = self._m.search(function='powiat', **om)
+        self.gminas = self._m.search(function='gmina', **om)
 
     def __repr__(self):
         return f"FrameLinkManagers({self._m!r})"
 
 
-class Register(ABC):
+class System(ABC):
     __slots__ = ()
 
     by_possession = (
@@ -628,7 +643,7 @@ class Register(ABC):
         f"Try looking for the proper argument name " \
         f"in the following list:\n{' ' * 12}%s."
 
-    sentinel = RegisterSentinel()
+    sentinel = SystemSentinel()
 
     def __init__(
             self,
@@ -644,7 +659,7 @@ class Register(ABC):
         ----------
         link : bool
             Whether to link the values in
-            search/converting to list/converting to dict.
+            search/(converting to list)/(converting to dict).
 
         unpack : bool
             Whether to unpack future results/processed rows.
@@ -671,9 +686,9 @@ class Register(ABC):
         self.ulic = ulic_data
 
         self.system = self.__class__.__name__.replace(' ', '_').casefold()
-        if self.system == "Register".casefold():
+        if self.system == "System".casefold():
             raise Error("abstract class")
-        self.database: pandas.DataFrame = getattr(
+        self.database: DataFrame = getattr(
             self, self.system, None
         )
         if self.database is None:
@@ -691,7 +706,7 @@ class Register(ABC):
         self.found_results = False
         self.unpacked = False
         self.linked = False
-        self.current_row = pandas.DataFrame()
+        self.current_row = DataFrame()
         self._results = EntryGroup(self)
 
         # Transferring
@@ -707,7 +722,7 @@ class Register(ABC):
         if link:
             self.link_manager = GenericLinkManager(
                 dict_link_managers=DictLinkManagers(self),
-                frame_link_managers=Register.frame_link_managers,
+                frame_link_managers=System.frame_link_managers,
                 cache=self.cache,
                 klass=self
             )
@@ -762,8 +777,8 @@ class Register(ABC):
                 self, self._candidate.reset_index())
             self._results.frame = self._results.frame.drop(columns=["level_0"])
             if (len(self.r) == 1 or self.force_unpack) and self.unpack_mode:
-                return self.unpack_row()
-        return self
+                return self.unpack_row(self.results)
+        return self.results
 
     @final
     def _failure(self):
@@ -813,7 +828,7 @@ class Register(ABC):
         Entry
         """
         dataframe = self.database.loc[self.database["index"] == int(i)]
-        return self.unpack_row(dataframe, link=link)
+        return self.unpack_row(dataframe=dataframe, link=link)
 
     get_entry = index
 
@@ -867,14 +882,14 @@ class Register(ABC):
         """
         return self._results
 
-    r = results
+    r = res = results
 
     @set_sentinel(sentinel.search)
     def search(
             self,
             *args,  # noqa for autocompletion
             **keywords  # noqa for autocompletion
-    ) -> Union["Entry", "Register"]:
+    ) -> Union["Entry", "EntryGroup"]:
         """
         Search for the most accurate entry using provided keywords.
 
@@ -937,18 +952,18 @@ class Register(ABC):
         >>> s.search("Poznań")
         SIMC()
         Results:
-           index WOJ POW GMI RODZ_GMI  RM MZ   NAZWA      SYM   SYMPOD     STAN_NA
-        0  11907  06  11  06        2  01  1  Poznań  0686397  0686397  2021-01-01
-        1  76796  24  10  03        2  00  1  Poznań  0217047  0216993  2021-01-01
-        2  95778  30  64  01        1  96  1  Poznań  0969400  0969400  2021-01-01
+           index WOJ POW GMI  ...   NAZWA      SYM   SYMPOD     STAN_NA
+        0  11907  06  11  06  ...  Poznań  0686397  0686397  2021-01-01
+        1  76796  24  10  03  ...  Poznań  0217047  0216993  2021-01-01
+        2  95778  30  64  01  ...  Poznań  0969400  0969400  2021-01-01
 
         >>> s.search("Poznań", woj="06")
 
         Returns
         -------
-        Union[Entry, Register]
-            Entry, if one most accurate entry was found, otherwise Register
-            if there were many results or no.
+        Union[Entry, EntryGroup]
+            Entry, if one most accurate entry was found, otherwise EntryGroup
+            if there were many results or not.
 
         """
         #
@@ -1044,7 +1059,7 @@ class Register(ABC):
     @set_sentinel(sentinel.unpack_row)
     def unpack_row(
             self,
-            dataframe: pandas.DataFrame = None,
+            dataframe: Union["EntryGroup", DataFrame] = None,
             *,
             link=True
     ) -> "Entry":
@@ -1053,8 +1068,8 @@ class Register(ABC):
 
         Parameters
         ----------
-        dataframe : pandas.DataFrame
-            DataFrame with length 1 to unpack.
+        dataframe : EntryGroup or DataFrame
+            Entry group/DataFrame with length 1 to unpack.
 
         link : bool
             Whether to link the linkable values.
@@ -1065,22 +1080,22 @@ class Register(ABC):
         """
         self.link_mode = (dataframe, link)[True]
         for field, colname in self.fields.items():
-            value = self.current_row.iat[
+            code = self.current_row.iat[
                 0, self.current_row.columns.get_loc(colname)
             ]
 
-            if str(value) != 'nan':
-                self.entry_helper[field] = value
+            if str(code) != 'nan':
+                self.entry_helper[field] = code
                 if self.link_manager.has_lm(field) and self.link_mode:
-                    name = self.link_manager.link(field, value)
+                    value = self.link_manager.link(field, code)
                     index = self.link_manager.link_indexes.get(
                         field, None)
                     if index:
                         self.entry_helper[field] = UnitLink(
-                            code=value, name=name, index=index)
+                            code=code, value=value, index=index)
                     else:
                         self.entry_helper[field] = Link(
-                            code=value, name=name)
+                            code=code, value=value)
 
         # TODO: move this somewhere else…
         if "integral_id" in self.entry_helper:
@@ -1152,7 +1167,7 @@ class Register(ABC):
         return chunks
 
 
-implement_common_data(Register)
+implement_common_data(System)
 
 
 class EntryGroupSentinel(object):
@@ -1181,8 +1196,8 @@ class EntryGroup(object):
         except AttributeError:
             return getattr(self.frame, item)
 
-    def __init__(self, reg, frame=pandas.DataFrame()):
-        self.system = reg
+    def __init__(self, system, frame=DataFrame()):
+        self.system = system
         self.frame = frame
 
     def __len__(self):
@@ -1278,14 +1293,14 @@ class EntryGroup(object):
 
         Examples
         --------
-        >>> warsaw = simc().search("Warszawa", gmitype="wiejska", woj="kujawsko-pomorskie")
+        >>> warsaw = simc().search("Warszawa", gmitype="wiejska", woj="04")
         >>> warsaw
         SIMC()
         Results:
-           index WOJ POW GMI RODZ_GMI  RM MZ     NAZWA      SYM   SYMPOD     STAN_NA
-        0   4810  04  14  05        2  00  1  Warszawa  1030760  0090316  2021-01-01
-        1   5699  04  04  03        2  00  1  Warszawa  0845000  0844991  2021-01-01
-        2   5975  04  14  07        2  00  1  Warszawa  0093444  0093438  2021-01-01
+           index WOJ POW GMI  ...     NAZWA      SYM   SYMPOD     STAN_NA
+        0   4810  04  14  05  ...  Warszawa  1030760  0090316  2021-01-01
+        1   5699  04  04  03  ...  Warszawa  0845000  0844991  2021-01-01
+        2   5975  04  14  07  ...  Warszawa  0093444  0093438  2021-01-01
 
         >>> warsaw.results.to_list("sym")  # equivalent to to_list("id")
         ['1030760', '0845000', '0093444']
@@ -1314,7 +1329,7 @@ class EntryGroup(object):
         if link and self.system.link_manager.has_lm(field):
             for key_index in range(len(new_list)):
                 new = self.system.__class__()
-                entry = new.unpack_row(pandas.DataFrame([
+                entry = new.unpack_row(DataFrame([
                     dataframe.loc[dataframe.index[key_index]]
                 ]))
                 new_list[key_index] = getattr(entry, field)
@@ -1327,7 +1342,7 @@ class EntryGroup(object):
             target: Union[str, type],
             _kwt=None,
             **other
-    ) -> "Register":
+    ) -> "System":
         """ Search :target: system using keywords from this instance. """
         global transfer_collector
         if _kwt:
@@ -1350,7 +1365,7 @@ class Entry(object):
     TERYT register entry class.
     """
 
-    system: Register
+    system: System
     terid: str = None
     voivodship: str = None
     powiat: str = None
@@ -1365,7 +1380,7 @@ class Entry(object):
     id: str = None
     integral_func: type(lambda: None) = (lambda: None)
     integral_id: str = None
-    row: pandas.DataFrame = None
+    row: DataFrame = None
     date: str = None
     index: int = None
 
@@ -1386,7 +1401,7 @@ class Entry(object):
     def results(self):
         return self.system.results
 
-    r = frame = results
+    r = res = frame = results
 
     @set_sentinel(sentinel.to_keywords)
     def to_keywords(self, transfer_target: Union[str, type]):
@@ -1421,25 +1436,30 @@ class Entry(object):
         yield keywords
         yield transfer_target
 
-    def transfer(self, key: Hashable, target: Union[str, type], **other) -> "Register":
+    def transfer(
+            self,
+            key: Hashable,
+            target: Union[str, type],
+            **other
+    ) -> "System":
         return EntryGroup(
             self.system, frame=self.frame
         ).transfer(key, target, self.to_keywords, **other)
 
     def __getattribute__(self, item):
-        # Register is mutable;
+        # System is mutable;
         # Entry isn't.
         try:
             return object.__getattribute__(self, item)
-        except AttributeError:
+        except AttributeError as a:
             try:
                 return object.__getattribute__(self.system, item)
             except AttributeError:
-                raise
+                raise a from a
 
     def __repr__(self, indent=True):
         joiner = '\n    ' if indent else ''
-        # TODO: compress it
+        # TODO: compress it maybe?
         return (f"{self.type}({joiner if indent else ''}" +
                 (f"name={self.name!r}, {joiner}" if self.name else "") +
                 (f"secname={self.secname!r}, {joiner}"
@@ -1518,15 +1538,15 @@ error_types = {
 }
 
 
-class SIMC(Register, ABC):
+class SIMC(System, ABC):
     """ SIMC system. """
 
 
-class TERC(Register, ABC):
+class TERC(System, ABC):
     """ TERC system. """
 
 
-class ULIC(Register, ABC):
+class ULIC(System, ABC):
     """ ULIC system. """
 
 
@@ -1549,10 +1569,10 @@ def _make_recent(sys,
     elif isinstance(sys, str) and sys in systems:
         most_recent = eval(sys)()
     elif isinstance(sys, type):
-        if not issubclass(sys, Register):
+        if not issubclass(sys, System):
             raise err
         most_recent = sys()
-    elif isinstance(sys, Register):
+    elif isinstance(sys, System):
         most_recent = sys.__class__()
     else:
         raise err
@@ -1583,7 +1603,8 @@ def sys_index(i, system=None, **params):
 
 def transfer(results, to_system=None, **keywords):
     if isinstance(to_system, type):
-        raise TypeError("target system must be a Register instance or name, not type")
+        raise TypeError("target system must be a "
+                        "System instance or name, not type")
     keywords = {'target': results.system, **keywords}
     recent = _make_recent(results.system)
     return recent.transfer(to_system, **keywords)
@@ -1613,19 +1634,19 @@ todict = to_dict
 
 def ensure_field(root_name, system=None):
     if isinstance(system, type):
-        raise TypeError("system must be a Register instance")
+        raise TypeError("system must be a System instance")
     return _make_recent(system).ensure_field(root_name)
 
 
-search.__doc__ = Register.search.__doc__
-sys_index.__doc__ = Register.index.__doc__
+search.__doc__ = System.search.__doc__
+sys_index.__doc__ = System.index.__doc__
 transfer.__doc__ = Entry.transfer.__doc__ = EntryGroup.transfer.__doc__
-to_list.__doc__ = Register.to_list.__doc__
-to_dict.__doc__ = Register.to_dict.__doc__
-ensure_field.__doc__ = Register.ensure_field.__doc__
+to_list.__doc__ = System.to_list.__doc__
+to_dict.__doc__ = System.to_dict.__doc__
+ensure_field.__doc__ = System.ensure_field.__doc__
 
 terc = Terc = TERC
 simc = Simc = SIMC
 ulic = Ulic = ULIC
 
-Register.frame_link_managers = FrameLinkManagers()
+System.frame_link_managers = FrameLinkManagers()

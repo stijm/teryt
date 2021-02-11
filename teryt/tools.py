@@ -42,16 +42,16 @@ def ensure_column(item, frame) -> Series:
             )[isinstance(item, Series)]()
 
 
-def set_sentinel(bound_priority_method) -> type(lambda: None):
+def set_sentinel(priority) -> type(lambda: None):
     """
     Precede the function to be decorated with another function,
     e.g. to check the arguments given to the function.
     """
-    def wrapper(sub):
-        @wraps(sub)
+    def wrapper(protected):
+        @wraps(protected)
         def priority_wrapper(self, *args, **kwargs):
-            bound_priority_method(self, args, kwargs)
-            return sub(self, *args, **kwargs)
+            priority(self, args, kwargs)
+            return protected(self, *args, **kwargs)
 
         return priority_wrapper
     return wrapper
@@ -103,7 +103,7 @@ class FrameSearch(object):
     ):
         col = ensure_column(col, self.frame)
         return self.frame.loc[
-            (col == value) if case or not isinstance(col, str)
+            (col == value) if case or not isinstance(value, str)
             else (col.str.lower() == value.lower())
         ]
 

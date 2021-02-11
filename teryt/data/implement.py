@@ -134,7 +134,9 @@ def implement_common_data(register):
 
 
 def implement_specific_data(simc, terc, ulic):
-    """ Internal helper function for implementing data on Register subclasses. """
+    """
+    Internal helper function for implementing data on Register subclasses.
+    """
     global SIMC, TERC, ULIC
 
     for klass in [simc, terc, ulic]:

@@ -20,7 +20,7 @@ from .core import (
     link_types,
     Locality,
     LocalityLink,
-    Register,
+    System,
     EntryGroup,
     search,
     Street,
