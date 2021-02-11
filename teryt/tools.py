@@ -1,6 +1,6 @@
 """ Utilities. """
 
-# This is the part of teryt library.
+# This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
@@ -8,7 +8,7 @@ from pandas import (  # noqa: F401
     Series,
     DataFrame
 )
-from typing import Any
+from typing import Any, Sequence, Union
 from re import escape
 from functools import wraps
 
@@ -49,11 +49,11 @@ def set_sentinel(bound_priority_method) -> type(lambda: None):
     """
     def wrapper(sub):
         @wraps(sub)
-        def inner_wrapper(self, *args, **kwargs):
+        def priority_wrapper(self, *args, **kwargs):
             bound_priority_method(self, args, kwargs)
             return sub(self, *args, **kwargs)
 
-        return inner_wrapper
+        return priority_wrapper
     return wrapper
 
 
@@ -77,7 +77,7 @@ class StringCaseFoldTuple(tuple):
         return item.casefold() in self.casefold()
 
 
-class FrameQuestioner(object):
+class FrameSearch(object):
     """
     Search broker for more understandable
     DataFrame searching.
@@ -163,9 +163,33 @@ class FrameQuestioner(object):
         ]
 
 
-def disinherit(parent, klasses):
-    """ Stop class inheriting from a :parent: class. """
-    for klass in klasses:
+class DisinheritanceError(KeyError):
+    """ Disinheritance error. """
+
+
+def disinherit(parent: type, klasses: Union[type, Sequence[type]]):
+    """
+    Stop classes (or one class) inheriting from their :parent: class.
+
+    Parameters
+    ----------
+    parent : type
+        Parent class to remove from :klasses:' bases.
+
+    klasses : type or Sequence[type]
+        Classes to disinherit.
+
+    Raises
+    ------
+    KeyError, if any class from :klasses: does not inherit from :parent:.
+    """
+    if isinstance(klasses, type):
+        klasses = [klasses]
+    for klass in set(klasses):
         bases = list(klass.__bases__)
+        if parent not in bases:
+            raise DisinheritanceError(
+                f"{klass.__name__} class does "
+                f"not inherit from {parent.__name__}")
         bases.remove(parent)
         klass.__bases__ = tuple(bases)

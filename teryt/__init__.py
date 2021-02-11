@@ -2,7 +2,7 @@
 
 """ Initialization module. """
 
-# This is the part of teryt library.
+# This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
@@ -10,7 +10,7 @@ from .data.manager import resource_file
 from .data import implement
 
 from .core import (
-    ensure_value_space,
+    ensure_field,
     Entry,
     entry_types,
     error_types,
@@ -21,7 +21,7 @@ from .core import (
     Locality,
     LocalityLink,
     Register,
-    Results,
+    EntryGroup,
     search,
     Street,
     SIMC,

@@ -1,6 +1,6 @@
 """ Manage TERYT data. """
 
-# This is the part of teryt library.
+# This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 

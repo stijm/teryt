@@ -1,13 +1,32 @@
-""" Implement TERYT bindings between columns and value spaces and links data. """
+""" Implement TERYT bindings between columns and fields and links data. """
 
-# This is the part of teryt library.
+# This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
 from types import SimpleNamespace
 
+
+COMMON = SimpleNamespace(gmitype_link_manager={
+        "miejska": "1",
+        "gmina miejska": "1",
+        "wiejska": "2",
+        "gmina wiejska": "2",
+        "miejsko-wiejska": "3",
+        "gmina miejsko-wiejska": "3",
+        "miasto w gminie miejsko-wiejskiej": "4",
+        "obszar wiejski w gminie miejsko-wiejskiej": "5",
+        "dzielnice m. st. Warszawy": "8",
+        "dzielnice Warszawy": "8",
+        "dzielnica Warszawy": "8",
+        "dzielnica": "8",
+        "delegatury w miastach: Kraków, Łódź, Poznań i Wrocław": "9",
+        "delegatura": "9"
+    })
+
+
 SIMC = SimpleNamespace(
-    value_spaces={
+    fields={
         "voivodship": 'WOJ',
         "powiat": 'POW',
         "gmina": 'GMI',
@@ -19,7 +38,7 @@ SIMC = SimpleNamespace(
         "integral_id": 'SYMPOD',
         "date": 'STAN_NA'
     },
-    link_spaces={
+    link_fields={
         "voivodship": 2,
         "powiat": 2,
         "gmina": 2,
@@ -48,7 +67,7 @@ SIMC = SimpleNamespace(
 )
 
 TERC = SimpleNamespace(
-    value_spaces={
+    fields={
         "voivodship": 'WOJ',
         "powiat": 'POW',
         "gmina": 'GMI',
@@ -57,7 +76,7 @@ TERC = SimpleNamespace(
         "function": 'NAZWA_DOD',
         "date": 'STAN_NA',
     },
-    link_spaces={
+    link_fields={
         "voivodship": 2,
         "powiat": 2,
         "gmina": 2,
@@ -66,7 +85,7 @@ TERC = SimpleNamespace(
 )
 
 ULIC = SimpleNamespace(
-    value_spaces={
+    fields={
         "voivodship": 'WOJ',
         "powiat": 'POW',
         "gmina": 'GMI',
@@ -78,7 +97,7 @@ ULIC = SimpleNamespace(
         "secname": 'NAZWA_2',
         "date": 'STAN_NA'
     },
-    link_spaces={
+    link_fields={
         'voivodship': 2,
         'powiat': 2,
         'gmina': 2,
@@ -87,17 +106,37 @@ ULIC = SimpleNamespace(
 )
 
 klass_name_dict = {
+    "COMMON": COMMON,
     "SIMC": SIMC,
     "TERC": TERC,
     "ULIC": ULIC
 }
 
 
-def data_implement(simc, terc, ulic):
+def apply_namespace(
+        namespace,
+        klass,
+        key=(lambda x: not x.startswith("__"))
+):
+    """ Set filtered :namespace:'s attributes on a :klass:. """
+    for attr in filter(key, dir(namespace)):
+        setattr(
+            klass,
+            attr,
+            object.__getattribute__(namespace, attr)
+        )
+
+
+def implement_common_data(register):
+    """ Internal helper function for implementing data on Register class. """
+    namespace = klass_name_dict["COMMON"]
+    apply_namespace(namespace, register)
+
+
+def implement_specific_data(simc, terc, ulic):
     """ Internal helper function for implementing data on Register subclasses. """
     global SIMC, TERC, ULIC
 
     for klass in [simc, terc, ulic]:
         namespace = klass_name_dict[klass.__name__]
-        for attr in filter(lambda x: not x.startswith("__"), namespace.__dict__):
-            setattr(klass, attr, getattr(namespace, attr))
+        apply_namespace(namespace, klass)

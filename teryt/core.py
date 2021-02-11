@@ -1,38 +1,36 @@
 """ Search TERYT. """
 
-# This is the part of teryt library.
+# This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
-# =========================
-# Future features:
+# Future features
+# ---------------
 # - Register.filter
 # - Register.to_xml
 # - Register.results.to_xml
-# =========================
 
 import dataclasses
 import pandas
+import re
 import typing
-from warnings import warn
 from abc import ABC
 from math import factorial
+from itertools import compress
 from typing import (
     final,
-    Union
+    Hashable,
+    Union,
 )
-from .data.implement import (data_implement as _data_implement)
+from warnings import warn
+from .data.implement import (
+    implement_common_data,
+    implement_specific_data
+)
 from .data.manager import (
     simc_data,
     terc_data,
     ulic_data
-)
-from .tools import (
-    disinherit,
-    require,
-    set_sentinel,
-    StringCaseFoldTuple,
-    FrameQuestioner
 )
 from .exceptions import (
     ErroneousUnitName,
@@ -42,14 +40,24 @@ from .exceptions import (
     UnitNotFound,
     UnpackError,
 )
+from .tools import (
+    disinherit,
+    require,
+    set_sentinel,
+    StringCaseFoldTuple,
+    FrameSearch
+)
 
 systems = StringCaseFoldTuple(('simc', 'terc', 'ulic'))
 transfer_collector = {}
 
 
-def transferred_searches(name):
-    for transferred_search in set(transfer_collector.get(name, ())):
-        yield getattr(transferred_search, 'system'), transferred_search
+def transferred_searches(key):
+    for transferred_search in set(transfer_collector.get(key, ())):
+        name = getattr(transferred_search, 'system')
+        if isinstance(name, Register):
+            name = name.system
+        yield name, transferred_search
 
 
 @dataclasses.dataclass(frozen=True)
@@ -118,9 +126,9 @@ class Search(object):
             self,
             *,
             dataframe: pandas.DataFrame,
-            field_name: str,
+            system: str,
             search_mode: str,
-            value_spaces: Union[dict, property],
+            fields: Union[dict, property],
             case: bool,
             by_possession: typing.Iterable,
             by_prefix: typing.Iterable,
@@ -130,9 +138,9 @@ class Search(object):
         self.dataframe = dataframe
         self.candidate = self.dataframe.copy()
         self.frames = [self.candidate]
-        self.field_name = field_name
+        self.database_name = system
         self.search_mode = search_mode
-        self.value_spaces = value_spaces
+        self.fields = fields
         self.case = case
         self.search_keywords = {}
         self.ineffective = ''
@@ -144,7 +152,7 @@ class Search(object):
         """ Was anything found? """
         return self.candidate.empty or self.candidate.equals(self.dataframe)
 
-    def shuffle(self):
+    def move_key(self):
         keys = [*self.search_keywords.keys()]
         values = [*self.search_keywords.values()]
         ineffective_key_index = keys.index(self.ineffective)
@@ -164,9 +172,9 @@ class Search(object):
             Search for locality name.
             """
             self.candidate = getattr(
-                FrameQuestioner(self.candidate),
+                FrameSearch(self.candidate),
                 self.search_mode
-            )(col=self.value_spaces['name'],
+            )(col=self.fields['name'],
               value=self.locname,
               case=self.case)
 
@@ -183,40 +191,40 @@ class Search(object):
 
         def search_loop():
             nonlocal self, attempts, done
-            for value_space, query in self.search_keywords.items():
-                if value_space == 'voivodship':
+            for field, query in self.search_keywords.items():
+                if field == 'voivodship':
                     query = query.upper()
                 attempts += 1
-                if value_space not in self.value_spaces:
+                if field not in self.fields:
                     continue
-                col = self.value_spaces[value_space]
+                col = self.fields[field]
                 keyword_args = dict(
                     col=col,
                     value=str(query),
                     case=self.case
                 )
                 frame_query = 'name'
-                if value_space in self.by_possession:
+                if field in self.by_possession:
                     frame_query = 'contains'
-                elif value_space in self.by_prefix:
+                elif field in self.by_prefix:
                     frame_query = 'startswith'
 
                 self.candidate = getattr(
-                    FrameQuestioner(self.candidate),
+                    FrameSearch(self.candidate),
                     frame_query
                 )(**keyword_args)
 
                 if self.failure():
                     if self.candidate.equals(self.dataframe):
                         no_uniqueness = f'It seems that all values in ' \
-                                        f'{value_space!r} value space ' \
+                                        f'{field!r} field ' \
                                         f'are equal to {query!r}. Try ' \
                                         f'using more unique key words.'
                         warn(no_uniqueness, category=UserWarning)
                     self.candidate = self.frames[-1]
                     if attempts <= max_attempts:
-                        self.ineffective = value_space
-                        self.shuffle()
+                        self.ineffective = field
+                        self.move_key()
                         search_loop()
                     else:
                         done = True
@@ -239,16 +247,16 @@ class GenericLinkManagerSentinel(object):
     @staticmethod
     def link(klass, arguments, _keywords):
         if arguments:
-            value_space = next(iter(arguments[:]))
-            if value_space != 'integral':
+            field = next(iter(arguments[:]))
+            if field != 'integral':
                 require(
-                    klass.has_lm(value_space),
-                    f'value space {value_space!r}'
-                    f' does not have a name-ID link'
+                    klass.has_lm(field),
+                    f'field {field!r} '
+                    f'cannot be linked'
                 )
 
     def link_names(self, klass, _args, keywords):
-        expected_kw = sorted(klass.klass.value_spaces.keys())
+        expected_kw = sorted(klass.klass.fields.keys())
         # self.__init__()
 
         for keyword in list(set(keywords)):
@@ -263,8 +271,7 @@ class GenericLinkManagerSentinel(object):
             elif klass.has_dict_lm(name):
                 link_manager = getattr(klass, name + '_link_manager')
                 if value.isnumeric() and value in link_manager.values():
-                    value = dict(map(
-                        lambda pair: (pair[1], pair[0]), link_manager))[value]
+                    value = dict.__call__(map(reversed, link_manager.items()))[value]
                 elif value not in link_manager:
                     e = f'{value!r} is not a valid ' \
                         f'{name.replace("_", " ")!r} non-ID value'
@@ -296,35 +303,35 @@ class GenericLinkManager(object):
         linkable = self.sentinel.linkable_args
         unlinkable = self.sentinel.unlinkable_args
         extract = unlinkable.copy()
-        for value_space in unlinkable.keys():
-            if value_space not in self.klass.terc.columns:
-                extract.pop(value_space)
+        for field in unlinkable.keys():
+            if field not in self.klass.terc.columns:
+                extract.pop(field)
 
-        spaces = list(self.klass.value_spaces.keys())
-        for value_space, value in linkable.items():
-            # TODO: implement a dict with all value spaces mappers
-            if value_space == 'voivodship':
+        fields = list(self.klass.fields.keys())
+        for field, value in linkable.items():
+            # TODO: implement a dict with all fields mappers
+            if field == 'voivodship':
                 value = value.upper()
 
-            frame_lmname = value_space + 's'
+            frame_lmname = field + 's'
             frame_link_manager = getattr(self.frame_link_managers,
                                          frame_lmname)
 
             if frame_link_manager.empty:
                 warn(
-                    f'no name-ID links available for {frame_lmname}. '
+                    f'no links available for {frame_lmname}. '
                     f'Updating search keywords with the provided value, '
                     f'however results are possible not to be found if it '
                     f'is not a valid ID.'
                 )
-                unlinkable.update({value_space: value})
+                unlinkable.update({field: value})
                 continue
 
             entry = Search(
                 dataframe=frame_link_manager,
-                field_name="terc",
+                system="terc",
                 search_mode="equal",
-                value_spaces=terc.value_spaces,
+                fields=terc.fields,
                 case=False,
                 by_possession=terc.by_possession,
                 by_prefix=terc.by_prefix,
@@ -332,47 +339,47 @@ class GenericLinkManager(object):
             )(search_keywords=unlinkable)
 
             require(not entry.empty,
-                    ErroneousUnitName(f"{value!r} is not a {value_space}"))
-            index = entry.iat[0, 0]  # noqa
-            link_result = {value_space: entry.iat[0, entry.columns.get_loc(
-                self.klass.value_spaces[value_space]
+                    ErroneousUnitName(f"{value!r} is not a {field}"))
+            index = entry.iat[0, 0]
+            link_result = {field: entry.iat[0, entry.columns.get_loc(
+                self.klass.fields[field]
             )]}
             unlinkable.update(link_result)
-            self.link_indexes[value_space] = index
+            self.link_indexes[field] = index
 
-            if value_space != spaces[0]:
-                quantum = spaces.index(value_space) - 1
+            if field != fields[0]:
+                quantum = fields.index(field) - 1
                 for rot in range(quantum + 1):
-                    prev = spaces[quantum - rot]
+                    prev = fields[quantum - rot]
                     unlinkable[prev] = entry.iat[
-                        0, entry.columns.get_loc(self.klass.value_spaces[prev])
+                        0, entry.columns.get_loc(self.klass.fields[prev])
                     ]
 
         return dict(**extract, **unlinkable)
 
-    def has_dict_lm(self, value_space: str) -> "bool":
-        return hasattr(self.dict_link_managers, value_space + '_link_manager')
+    def has_dict_lm(self, field: str) -> "bool":
+        return hasattr(self.dict_link_managers, field + '_link_manager')
 
-    def has_frame_lm(self, value_space: str) -> "bool":
-        return hasattr(self.frame_link_managers, value_space + 's')
+    def has_frame_lm(self, field: str) -> "bool":
+        return hasattr(self.frame_link_managers, field + 's')
 
-    def has_lm(self, value_space: str) -> "bool":
+    def has_lm(self, field: str) -> "bool":
         return self.has_dict_lm(
-            value_space
+            field
         ) or self.has_frame_lm(
-            value_space
+            field
         )
 
     @set_sentinel(sentinel.link)
-    def link(self, value_space: str, value: str):
+    def link(self, field: str, value: str):
         """
-        Resolve locality that value in value space refers to,
+        Resolve locality that value in field refers to,
         creating and returning a Link instance.
 
         Parameters
         ----------
-        value_space : str
-            Value space of :value:.
+        field : str
+            field of :value:.
 
         value : value
             Value to link.
@@ -382,55 +389,55 @@ class GenericLinkManager(object):
         str
         """
 
-        if self.has_dict_lm(value_space):
-            return dict(map(
-                lambda pair: (pair[1], pair[0]),
-                getattr(self.dict_link_managers, value_space + '_link_manager'
+        if self.has_dict_lm(field):
+            return dict.__call__(map(
+                reversed,
+                getattr(self.dict_link_managers, field + '_link_manager'
                         ).items()))[value]
 
-        if value_space == 'integral':  # special case
+        if field == 'integral':  # special case
             new = simc()
             integral = new.search
             return integral
 
         unit_link_manager = terc()
 
-        if value_space not in self.klass.link_spaces or str(value) == 'nan':
+        if field not in self.klass.link_fields or str(value) == 'nan':
             return ''
 
-        keywords = {'function': self.klass.value_spaces[value_space]}
-        spaces = list(self.klass.value_spaces.keys())
+        keywords = {'function': self.klass.fields[field]}
+        fields = list(self.klass.fields.keys())
         helper = self.klass.entry_helper
 
-        if value_space != spaces[0]:
-            quantum = spaces.index(value_space) - 1
+        if field != fields[0]:
+            quantum = fields.index(field) - 1
             for rot in range(quantum + 1):
-                prev_value = spaces[quantum - rot]
+                prev_value = fields[quantum - rot]
                 keywords[prev_value] = str(helper[prev_value])
 
-        keywords[value_space] = value
+        keywords[field] = value
 
-        if value_space != spaces[-1]:
-            next_value = spaces[spaces.index(value_space) + 1]
+        if field != fields[-1]:
+            next_value = fields[fields.index(field) + 1]
             keywords[next_value] = 'nan'
 
         if tuple(keywords.items()) in self.cache:
             return self.cache[tuple(keywords.items())]
 
         result = Search(
-            dataframe=unit_link_manager.field,
-            field_name=unit_link_manager.system,
+            dataframe=unit_link_manager.database,
+            system=unit_link_manager.system,
             search_mode='no_locname',
-            value_spaces=unit_link_manager.value_spaces,
+            fields=unit_link_manager.fields,
             case=False,
             by_possession=unit_link_manager.by_possession,
             by_prefix=unit_link_manager.by_prefix,
         )(search_keywords=keywords)
 
         name = result.iat[
-            0, result.columns.get_loc(unit_link_manager.value_spaces["name"])
+            0, result.columns.get_loc(unit_link_manager.fields["name"])
         ]
-        self.link_indexes[value_space] = result.iat[0, 0]
+        self.link_indexes[field] = result.iat[0, 0]
         self.store({tuple(keywords.items()): name})
         return name
 
@@ -472,11 +479,11 @@ class RegisterSentinel(object):
                 'no keyword arguments')
 
         search_keywords = tuple(
-            set(klass.locname_keywords + (*klass.value_spaces.keys(),))
+            set(klass.locname_keywords + (*klass.fields.keys(),))
         ) + klass.optional_str_arguments
 
-        keywords = dict(map(  # woj -> voivodship
-            lambda kv: (klass.ensure_value_space(kv[0]), kv[1]),
+        keywords = dict(map(  # roots -> fields
+            lambda kv: (klass.ensure_field(kv[0]), kv[1]),
             keywords.items())
         )
 
@@ -487,9 +494,6 @@ class RegisterSentinel(object):
                 f'{", ".join(sorted(search_keywords))}'
                 f')'
             )
-
-        klass.conflicts += tuple(
-            map(lambda ls: ('terid', ls), klass.link_spaces))
 
         for conflicted in klass.conflicts:
             conflict = []
@@ -503,7 +507,7 @@ class RegisterSentinel(object):
                             (' and '.join(map('%s'.__mod__, conflicted))))
                     conflict.append(keyword)
 
-        klass.locname_value_space, klass.force_unpack = None, False
+        klass.locname_field, klass.force_unpack = None, False
         modes = klass.locname_keywords + ('no_locname',)
         klass.search_mode = modes[-1]
 
@@ -511,16 +515,17 @@ class RegisterSentinel(object):
             for mode in klass.locname_keywords:
                 if keyword == mode:
                     klass.search_mode = mode
-                    klass.locname_value_space = keywords[mode]
+                    klass.locname_field = keywords[mode]
                     del keywords[mode]
 
-        klass.raise_for_failure = keywords.pop('raise_for_failure', False)
-        klass.unpack = keywords.pop('unpack', klass.unpack)
-        klass._link = keywords.pop('link', True)
-        klass.force_unpack = keywords.pop('force_unpack', False)
-        klass.unpacked = keywords.pop('unpacked', False)
-        klass.case = keywords.pop('case', False)
-        terid = keywords.pop('terid', '')
+        klass.raise_for_failure = keywords.pop("raise_for_failure",
+                                               klass.raise_for_failure)
+        klass.unpack_mode = keywords.pop("unpack", klass.unpack_mode)
+        klass.link_mode = keywords.pop("link", klass.link_mode)
+        klass.force_unpack = keywords.pop("force_unpack", klass.force_unpack)
+        klass.unpacked = keywords.pop("unpacked", False)
+        klass.case = keywords.pop("case", klass.case)
+        terid = keywords.pop("terid", '')
 
         if not klass.unpacked:
             klass.link_manager.erroneous_argument = klass.erroneous_argument
@@ -530,55 +535,38 @@ class RegisterSentinel(object):
             [keywords.__setitem__(n, v) for n, v in unpacked.items() if v]
 
         klass.search_keywords = keywords
-        klass._candidate = klass.field[:]
+        klass._candidate = klass.database[:]
 
-        for value_space in klass.search_keywords:
-            column = klass.value_spaces[value_space]
-            klass.field[column] = klass.field[
-                klass.value_spaces[value_space]
+        for field in klass.search_keywords:
+            root_name = klass.fields[field]
+            klass.database[root_name] = klass.database[
+                klass.fields[field]
             ].map(str)
-
-    @staticmethod
-    def to_keywords(klass, arguments, _kwds):
-        require(arguments, 'to_keywords(): no arguments')
-        target_name = arguments[0]
-        if target_name in list(map(eval, systems)):
-            target_name = target_name.__name__
-        if target_name not in systems:
-            raise ValueError(
-                f'cannot evaluate transfer target using name {target_name!r}')
-
-        klass.transfer_target = eval(target_name)()
-        require(
-            klass.unpacked,
-            'cannot perform generating keywords from '
-            'properties if search results were not unpacked'
-        )
 
     @staticmethod
     def unpack_row(klass, _args, keywords):
         row = keywords.pop("dataframe", klass.results)
-        value_spaces = klass.value_spaces
+        fields = klass.fields
         if row is None:
-            raise UnpackError('nothing to unpack from')
+            raise UnpackError("nothing to unpack from")
         if row.empty:
-            raise UnpackError('nothing to unpack from')
+            raise UnpackError("nothing to unpack from")
         if len(row) != 1:  # it's not a row then
             raise UnpackError(
-                'cannot unpack from more '
-                'than one TERYT entry '
-                f'(got {len(row)} entries)'
+                "cannot unpack from more "
+                "than one TERYT entry "
+                f"(got {len(row)} entries)"
             )
-        for value_space in value_spaces:
-            if value_spaces[value_space] not in row:
+        for field in fields:
+            if fields[field] not in row:
                 raise UnpackError(
-                    f'value space '
-                    f'{value_space.replace("_", " ")} '
-                    f'(the real column is named'
-                    f' {value_spaces[value_space]!r})'
-                    f' not in source DataFrame'
+                    f"field "
+                    f"{field.replace('_', ' ')} "
+                    f"(root name: "
+                    f"{fields[field]!r}) "
+                    f"not in source DataFrame"
                 )
-        klass.row = row
+        klass.current_row = row
 
 
 class DictLinkManagers(object):
@@ -590,40 +578,46 @@ class DictLinkManagers(object):
 
 class FrameLinkManagers(object):
     def __init__(self):
-        o = dict(unpack=False, unpacked=True)
+        om = dict(unpack=False, unpacked=True)
         self._m = terc(link=False)
-        self.voivodships = self._m.search(function='województwo', **o).results
-        self.powiats = self._m.search(function='powiat', **o).results
-        self.gminas = self._m.search(function='gmina', **o).results
+        self.voivodships = self._m.search(function='województwo', **om).r
+        self.powiats = self._m.search(function='powiat', **om).r
+        self.gminas = self._m.search(function='gmina', **om).r
 
     def __repr__(self):
         return f"FrameLinkManagers({self._m!r})"
 
 
 class Register(ABC):
+    __slots__ = ()
+
     by_possession = (
-        'function',
+        "function",
     )
     by_prefix = (
-        'date',  # TODO: it should be a datetime argument
+        "date",  # TODO: this should be a datetime argument
     )
     locname_keywords = (
-        'name',
-        'match',
-        'startswith',
-        'endswith',
-        'contains'
+        "name",
+        "match",
+        "startswith",
+        "endswith",
+        "contains"
+    )
+    conflicts = (
+        locname_keywords,
+        ("force_unpack", "unpack")
     )
     optional_bool_arguments = (
-        'raise_for_failure',
-        'force_unpack',
-        'unpack',
-        'link',
-        'unpacked',
-        'case'
+        "raise_for_failure",
+        "force_unpack",
+        "unpack",
+        "link",
+        "unpacked",
+        "case"
     )
     optional_str_arguments = (
-        'terid',
+        "terid",
     )
     optional_bool_str_arguments = (
         *optional_bool_arguments,
@@ -634,26 +628,15 @@ class Register(ABC):
         f"Try looking for the proper argument name " \
         f"in the following list:\n{' ' * 12}%s."
 
-    gmitype_link_manager = {
-        "miejska": "1",
-        "gmina miejska": "1",
-        "wiejska": "2",
-        "gmina wiejska": "2",
-        "miejsko-wiejska": "3",
-        "gmina miejsko-wiejska": "3",
-        "miasto w gminie miejsko-wiejskiej": "4",
-        "obszar wiejski w gminie miejsko-wiejskiej": "5",
-        "dzielnice m. st. Warszawy": "8",
-        "dzielnice Warszawy": "8",
-        "dzielnica Warszawy": "8",
-        "dzielnica": "8",
-        "delegatury w miastach: Kraków, Łódź, Poznań i Wrocław": "9",
-        "delegatura": "9"
-    }
-
     sentinel = RegisterSentinel()
 
-    def __init__(self, link=True, unpack=True):
+    def __init__(
+            self,
+            case=False,
+            link=True,
+            unpack=True,
+            raise_for_failure=False,
+    ):
         """
         Constructor.
 
@@ -666,45 +649,61 @@ class Register(ABC):
         unpack : bool
             Whether to unpack future results/processed rows.
         """
+        self.__class__.conflicts += tuple(
+            map(lambda ls: ('terid', ls), self.link_fields))
+
+        # Modes
+        self.case = case
+        self.force_unpack = False
+        self.link_mode = link
+        self.raise_for_failure = raise_for_failure
+        self.unpack_mode = unpack
+        self.modes = dict(
+            case=self.case,
+            link=self.link_mode,
+            raise_for_failure=self.raise_for_failure,
+            unpack=self.unpack_mode
+        )
+
+        # Data
         self.simc = simc_data
         self.terc = terc_data
         self.ulic = ulic_data
+
         self.system = self.__class__.__name__.replace(' ', '_').casefold()
         if self.system == "Register".casefold():
             raise Error("abstract class")
-        self.field: pandas.DataFrame = getattr(
+        self.database: pandas.DataFrame = getattr(
             self, self.system, None
         )
-        require(
-            self.field is not None,
-            f'invalid system {self.system!r}'
-        )
-        self.field = self.field.reset_index()
+        if self.database is None:
+            raise ValueError(f"invalid system {self.system!r}")
+        self.database = self.database.reset_index()
         self._candidate = None
 
-        self.cols = [*self.field.columns]
-        self.len = len(self.field)
-        self.columns = self.cols
-        self.conflicts = (self.locname_keywords, ('force_unpack', 'unpack'))
-        self.case = None
-        self.force_unpack = None
-        self.locname_value_space = None
-        self.valid_keywords = None
-        self.unpack = unpack
-        self.search_keywords = None
-        self._search_keywords = None
+        # Root names
+        self.root_names = self.roots = [*self.database.columns]
+
+        # Searching
+        self.locname_field = None
         self.search_mode = None
-        self.raise_for_failure = None
-        self._link = link
-        self.results_found = False
+        self.search_keywords = {}
+        self.found_results = False
         self.unpacked = False
         self.linked = False
-        self._results = Results(self)
+        self.current_row = pandas.DataFrame()
+        self._results = EntryGroup(self)
+
+        # Transferring
         self.transfer_target = None
+
+        # Building links
         self.entry_helper = {}
-        self.row = pandas.DataFrame()
+
+        # Caching
         self.cache = {}
         self.store = self.cache.update
+
         if link:
             self.link_manager = GenericLinkManager(
                 dict_link_managers=DictLinkManagers(self),
@@ -713,52 +712,44 @@ class Register(ABC):
                 klass=self
             )
 
-    @property
-    def results(self):
-        return self._results
+    def __enter__(self):
+        return self
 
-    r = results
-
-    def __repr__(self):
-        return f"{self.system.upper()}()" + \
-               (f"\nResults:\n{self.results}"
-                if self.results_found else "")
-
-    @property
-    def link_spaces(self):
-        """ Spaces to be linked. """
-        raise NotImplementedError
-
-    @property
-    def value_spaces(self):
-        """ Value spaces. """
-        raise NotImplementedError
-
-    @final
-    def unique_value_space(self, value_space):
-        """
-        Return if a value space is unique in comparison
-        to other systems.
-        """
-        other_value_spaces = set(
-            filter(lambda: not self.field.equals,
-                   [self.simc, self.terc, self.ulic])
-        )
-
-        return all([value_space in self.value_spaces,
-                    value_space not in other_value_spaces])
-
-    def __iter__(self):
-        if self.entry_helper['terid']:
-            yield 'terid', self.entry_helper['terid']
-        for value_space in self.value_spaces:
-            if self.entry_helper.get(value_space, ""):
-                yield value_space, self.entry_helper.get(value_space, "")
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_val:
+            raise
 
     def __getitem__(self, item):
         return dict(self)[item]
 
-    @final
+    def __iter__(self):
+        if self.entry_helper["terid"]:
+            yield "terid", self.entry_helper["terid"]
+        for field in self.fields:
+            if self.entry_helper.get(field, ""):
+                yield field, self.entry_helper.get(field, "")
+
+    def __len__(self):
+        return len(self.database)
+
+    def __repr__(self):
+        init_args = ", ".join(map(str, compress(
+            ["link=" + repr(self.link_mode),
+             "unpack=" + repr(self.unpack_mode),
+             "force_unpack=" + repr(self.force_unpack),
+             "raise_for_failure=" + repr(self.raise_for_failure)],
+            [not self.link_mode,
+             not self.unpack_mode,
+             bool(self.force_unpack),
+             bool(self.raise_for_failure)]
+        )))
+
+        return (f"{(__name__ + '.', '')[__name__ == '__main__']}"
+                f"{self.system.upper()}(" +
+                init_args + ")" +
+                (f"\nResults:\n{self.results}"
+                 if self.found_results else ""))
+
     def _dispatcher(self):
         if self._failure():
             not_found_exctype = error_types[self.system.lower()]
@@ -766,71 +757,44 @@ class Register(ABC):
                 raise not_found_exctype('no results found')
             self.__init__()
         else:
-            self.results_found = True
-            self._results = Results(
+            self.found_results = True
+            self._results = EntryGroup(
                 self, self._candidate.reset_index())
             self._results.frame = self._results.frame.drop(columns=["level_0"])
-            if (len(self._results) == 1 or self.force_unpack) and self.unpack:
+            if (len(self.r) == 1 or self.force_unpack) and self.unpack_mode:
                 return self.unpack_row()
         return self
 
     @final
     def _failure(self):
-        return self._candidate.empty or self._candidate.equals(self.field)
-
-    @set_sentinel(sentinel.to_keywords)
-    def to_keywords(self, _transfer_target_name: Union[str, type]):
-        """
-        Create and return keywords leading to current search results.
-
-        Parameters
-        ----------
-        _transfer_target_name: str or type
-            Target class (SIMC, TERC or ULIC).
-
-        Returns
-        -------
-        generator
-        """
-        transfer_target = self.transfer_target
-        properties = dict(self)
-        name_space_value = properties.pop('name')
-        prop_copy = properties.copy()
-        for k, v in prop_copy.items():
-            if k in transfer_target.value_spaces and str(v):
-                properties[k] = str(v)
-            else:
-                properties.__delitem__(k)
-        keywords = {
-            **properties,
-            'unpacked': True,
-            'name': name_space_value,
-            'raise_for_failure': self.raise_for_failure,
-            'case': self.case
-        }
-        yield keywords
-        yield transfer_target
+        return self._candidate.empty or self._candidate.equals(self.database)
 
     @final
-    def ensure_value_space(self, column_name):
+    def ensure_field(self, name):
         """
-        Find :column_name: in value spaces and return it if it occurs.
+        Find :name: in fields and return it if it occurs.
 
         Parameters
         ----------
-        column_name
+        name : str
+            Name to return field name of.
 
         Returns
         -------
         str
         """
-        spaces = self.value_spaces
-        if column_name in spaces:
-            return column_name
-        column_name_upper = column_name.upper()  # columns are upper
-        return dict([*map(reversed, spaces.items())]).get(
-            column_name_upper, column_name
+        fields = self.fields
+        if name in fields:
+            return name
+        root_name_upper = name.upper()  # root names are upper
+        return dict([*map(reversed, fields.items())]).get(
+            root_name_upper, name
         )
+
+    @property
+    def fields(self):
+        """ Fields. """
+        raise NotImplementedError
 
     def index(self, i, /, *, link=True):
         """
@@ -848,8 +812,10 @@ class Register(ABC):
         -------
         Entry
         """
-        dataframe = self.field.loc[self.field["index"] == int(i)]
-        return self.unpack_row(dataframe=dataframe, link=link)
+        dataframe = self.database.loc[self.database["index"] == int(i)]
+        return self.unpack_row(dataframe, link=link)
+
+    get_entry = index
 
     @property
     def is_entry(self):
@@ -862,7 +828,15 @@ class Register(ABC):
         """
         return False
 
-    is_unit = is_loc = is_street = is_entry
+    isentry = is_entry
+    isunit = is_unit = is_entry
+    isloc = is_loc = is_entry
+    isstreet = is_street = is_entry
+
+    @property
+    def link_fields(self):
+        """ Fields to be linked. """
+        raise NotImplementedError
 
     def pack_terid(self, **info) -> "str":
         """
@@ -871,133 +845,46 @@ class Register(ABC):
         Parameters
         ----------
         **info
-            Keyword arguments consisting of linkable value spaces.
+            Keyword arguments consisting of linkable fields.
 
         Returns
         -------
         str
         """
         return ''.join(map(str, map(
-            lambda space: info.get(space, ""),
-            filter(lambda x: str(x) != 'nan', self.link_spaces)
+            lambda field: info.get(field, ""),
+            filter(lambda x: str(x) != 'nan', self.link_fields)
         )))
 
-    def unpack_terid(self, teritorial_id: str, errors: bool = True) -> "dict":
+    @property
+    def results(self):
         """
-        Unpack teritorial ID into information.
-
-        Parameters
-        ----------
-        teritorial_id : str
-            ID to unpack.
-
-        errors : bool
-            Whether to raise errors if :teritorial_id: is invalid.
+        Results of the most recent search.
 
         Returns
         -------
-        dict
+        EntryGroup
         """
-        if not teritorial_id:
-            raise ValueError('cannot unpack an empty teritorial ID string')
-        chunks = {}
-        frames = {}
-        max_length = sum(self.link_spaces.values())
-        if len(teritorial_id) > max_length:
-            f'{self.system.upper()} teritorial ID length'
-            f' is expected to be maximally {max_length}'
-        index = 0
+        return self._results
 
-        for link_manager_value_space, proper_length in self.link_spaces.items():
-            if index >= len(teritorial_id) - 1:
-                break
-            frames.update(
-                {link_manager_value_space: getattr(
-                    self.link_manager, link_manager_value_space + 's'
-                )}
-            )
-            chunk = teritorial_id[index:index + proper_length]
-            unpack = self.unpack
-            if errors:
-                checker = type(self)().search(
-                    unpacked=True, unpack=False,
-                    **{link_manager_value_space: chunk})
-                if checker.results.empty:
-                    raise ValueError(
-                        repr(chunk) +
-                        f'is an incorrect teritorial code chunk '
-                        f'(error at {link_manager_value_space!r} value space'
-                        f', column '
-                        f'{self.value_spaces[link_manager_value_space]!r})'
-                    )
-            self.unpack = unpack
-            chunks.update({link_manager_value_space: chunk})
-            index += proper_length
-
-        return chunks
-
-    @set_sentinel(sentinel.unpack_row)
-    def unpack_row(self, *, dataframe: pandas.DataFrame = None, link=True) -> "Entry":  # noqa
-        """
-        Unpack one-row DataFrame to Entry instance.
-
-        Parameters
-        ----------
-        dataframe : pandas.DataFrame
-            DataFrame to unpack.
-
-        Returns
-        -------
-        Entry
-        """
-        self._link = link
-
-        for value_space, colname in self.value_spaces.items():
-            value = self.row.iat[
-                0, self.row.columns.get_loc(colname)
-            ]
-
-            if str(value) != 'nan':
-                self.entry_helper[value_space] = value
-                if self.link_manager.has_lm(value_space) and self._link:
-                    name = self.link_manager.link(value_space, value)
-                    index = self.link_manager.link_indexes.get(
-                        value_space, None)
-                    if index:
-                        self.entry_helper[value_space] = UnitLink(
-                            code=value, name=name, index=index)
-                    else:
-                        self.entry_helper[value_space] = Link(
-                            code=value, name=name)
-
-        # TODO: move this somewhere else…
-        if "integral_id" in self.entry_helper:
-            self.entry_helper[
-                'integral_func'] = self.link_manager.link(
-                "integral", self.entry_helper['integral_id'])
-
-        self.entry_helper['terid'] = self.pack_terid(**self.entry_helper)
-        self.unpacked = True
-        return entry_types[self.system].__call__(
-            system=self,
-            **self.entry_helper,
-            row=self.row,
-            index=self.row.iat[0, 0]
-        )
+    r = results
 
     @set_sentinel(sentinel.search)
-    def search(self, *_args, **_keywords) -> Union["Register", "Locality"]:
+    def search(
+            self,
+            *args,  # noqa for autocompletion
+            **keywords  # noqa for autocompletion
+    ) -> Union["Entry", "Register"]:
         """
         Search for the most accurate entry using provided keywords.
 
         Parameters
         ----------
-        *_args
-            Positional arguments.
-            Only one positional argument is accepted: as an equivalent
-            to "name=" keyword parameter.
+        *args
+            Positional arguments. Can only contain name of
+            the searched locality, street or unit (all systems).
 
-        **_keywords
+        **keywords
             Keyword arguments.
 
         Other Parameters
@@ -1055,15 +942,13 @@ class Register(ABC):
         1  76796  24  10  03        2  00  1  Poznań  0217047  0216993  2021-01-01
         2  95778  30  64  01        1  96  1  Poznań  0969400  0969400  2021-01-01
 
-        >>> s.search("Poznań")
+        >>> s.search("Poznań", woj="06")
 
         Returns
         -------
-        Entry
-            If one most accurate entry was found.
-
-        Register
-            If there were many results.
+        Union[Entry, Register]
+            Entry, if one most accurate entry was found, otherwise Register
+            if there were many results or no.
 
         """
         #
@@ -1071,38 +956,17 @@ class Register(ABC):
         #       as search keywords. (09-02-2021)
         #
         self._candidate = Search(
-            dataframe=self.field,
-            field_name=self.system,
+            dataframe=self.database,
+            system=self.system,
             search_mode=self.search_mode,
-            value_spaces=self.value_spaces,
+            fields=self.fields,
             case=self.case,
-            locname=self.locname_value_space,
+            locname=self.locname_field,
             by_possession=self.by_possession,
             by_prefix=self.by_prefix
         )(search_keywords=self.search_keywords)
+
         return self._dispatcher()
-
-    def to_list(self, value_space: str, link: bool = True) -> "list":
-        """
-        Return list of all values in :value space: in the field.
-
-        Parameters
-        ----------
-        value_space : str
-            Value space to retrieve values of.
-
-        link : bool
-            Whether to link the linkable values. Defaults to True.
-
-        Returns
-        -------
-        list
-        """
-        return list(Results(self, frame=self.field).to_list(
-            value_space=value_space, link=link
-        ))
-
-    tolist = to_list
 
     def to_dict(
             self,
@@ -1120,7 +984,7 @@ class Register(ABC):
 
         root_names : bool
             Whether to leave the database's column names or apply
-            the value spaces names.
+            the fields names.
 
         link : bool
             Whether to link the linkable values. Defaults to True.
@@ -1129,30 +993,184 @@ class Register(ABC):
         -------
         dict
         """
-        return dict(Results(self, frame=self.field).to_dict(
+        return dict(EntryGroup(self, frame=self.database).to_dict(
             root_names=root_names, indexes=indexes, link=link
         ))
 
-    get_entry = index
+    def to_list(self, field: str, link: bool = True) -> "list":
+        """
+        Return list of all values in :field: in the database.
 
-    def __enter__(self):
-        return self
+        Parameters
+        ----------
+        field : str
+            field to retrieve values of.
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_val:
-            raise
+        link : bool
+            Whether to link the linkable values. Defaults to True.
+
+        Returns
+        -------
+        list
+        """
+        return list(EntryGroup(self, frame=self.database).to_list(
+            field=field, link=link
+        ))
+
+    tolist = to_list
+
+    @final
+    def unique_field(self, field):
+        """
+        State whether a field is unique in comparison
+        to other systems.
+
+        Parameters
+        ----------
+        field : str
+            Name of a field.
+
+        Returns
+        -------
+        bool
+        """
+        other_fields = set(filter(
+            lambda: not self.database.equals,
+            [self.simc, self.terc, self.ulic])
+        )
+
+        return all([field in self.fields, field not in other_fields])
+
+    @set_sentinel(sentinel.unpack_row)
+    def unpack_row(
+            self,
+            dataframe: pandas.DataFrame = None,
+            *,
+            link=True
+    ) -> "Entry":
+        """
+        Unpack one-row DataFrame to Entry instance.
+
+        Parameters
+        ----------
+        dataframe : pandas.DataFrame
+            DataFrame with length 1 to unpack.
+
+        link : bool
+            Whether to link the linkable values.
+
+        Returns
+        -------
+        Entry
+        """
+        self.link_mode = (dataframe, link)[True]
+        for field, colname in self.fields.items():
+            value = self.current_row.iat[
+                0, self.current_row.columns.get_loc(colname)
+            ]
+
+            if str(value) != 'nan':
+                self.entry_helper[field] = value
+                if self.link_manager.has_lm(field) and self.link_mode:
+                    name = self.link_manager.link(field, value)
+                    index = self.link_manager.link_indexes.get(
+                        field, None)
+                    if index:
+                        self.entry_helper[field] = UnitLink(
+                            code=value, name=name, index=index)
+                    else:
+                        self.entry_helper[field] = Link(
+                            code=value, name=name)
+
+        # TODO: move this somewhere else…
+        if "integral_id" in self.entry_helper:
+            self.entry_helper[
+                "integral_func"] = self.link_manager.link(
+                "integral", self.entry_helper["integral_id"])
+
+        self.entry_helper["terid"] = self.pack_terid(**self.entry_helper)
+        self.unpacked = True
+        return entry_types[self.system].__call__(
+            system=self,
+            **self.entry_helper,
+            row=self.current_row,
+            index=self.current_row.iat[0, 0]
+        )
+
+    def unpack_terid(self, teritorial_id: str, errors: bool = True) -> "dict":
+        """
+        Unpack teritorial ID into information.
+
+        Parameters
+        ----------
+        teritorial_id : str
+            ID to unpack.
+
+        errors : bool
+            Whether to raise errors if :teritorial_id: is invalid.
+
+        Returns
+        -------
+        dict
+        """
+        if not teritorial_id:
+            raise ValueError("cannot unpack an empty teritorial ID string")
+        chunks = {}
+        frames = {}
+        max_length = sum(self.link_fields.values())
+        if len(teritorial_id) > max_length:
+            f"{self.system.upper()} teritorial ID length "
+            f"is expected to be maximally {max_length}"
+        index = 0
+
+        for link_manager_field, proper_length in self.link_fields.items():
+            if index >= len(teritorial_id) - 1:
+                break
+            frames.update(
+                {link_manager_field: getattr(
+                    self.link_manager, link_manager_field + 's'
+                )}
+            )
+            chunk = teritorial_id[index:index + proper_length]
+            unpack = self.unpack_mode
+            if errors:
+                checker = type(self)().search(
+                    unpacked=True, unpack=False,
+                    **{link_manager_field: chunk})
+                if checker.results.empty:
+                    raise ValueError(
+                        repr(chunk) +
+                        f"is an incorrect teritorial code chunk "
+                        f"(error at {link_manager_field!r} field, "
+                        f"root name "
+                        f"{self.fields[link_manager_field]!r})"
+                    )
+            self.unpack_mode = unpack
+            chunks.update({link_manager_field: chunk})
+            index += proper_length
+
+        return chunks
 
 
-class Results(object):
-    def __init__(self, reg, frame=pandas.DataFrame()):
-        self.reg = reg
-        self.frame = frame
+implement_common_data(Register)
 
-    def __repr__(self):
-        return repr(self.frame)
 
-    def __len__(self):
-        return len(self.frame)
+class EntryGroupSentinel(object):
+    @staticmethod
+    def to_keywords(klass, arguments, _kwds):
+        require(arguments, "to_keywords(): no arguments")
+        target_name = arguments[0]
+        if target_name in list(map(eval, systems)):
+            target_name = target_name.__name__
+        if target_name not in systems:
+            raise ValueError(
+                f"cannot evaluate transfer target using name {target_name!r}")
+
+        klass.transfer_target = eval(target_name)()
+
+
+class EntryGroup(object):
+    sentinel = EntryGroupSentinel()
 
     def __contains__(self, item):
         return self.frame.__contains__(item)
@@ -1163,13 +1181,23 @@ class Results(object):
         except AttributeError:
             return getattr(self.frame, item)
 
+    def __init__(self, reg, frame=pandas.DataFrame()):
+        self.system = reg
+        self.frame = frame
+
+    def __len__(self):
+        return len(self.frame)
+
+    def __repr__(self):
+        return repr(self.frame)
+
     def get_entry(self, number, link=True):
         dataframe = self.frame.reset_index()
         dataframe = dataframe.loc[dataframe["level_0"] == number]
         dataframe = dataframe.drop(columns=["level_0"])
         return (lambda: dataframe,
-                lambda: self.reg.__class__().unpack_row
-                (dataframe=dataframe)
+                lambda: self.system.__class__().unpack_row
+                (dataframe)
                 )[link]()
 
     def to_dict(
@@ -1188,7 +1216,7 @@ class Results(object):
 
         root_names : bool
             Whether to leave the database's column names or apply
-            the value spaces names.
+            the fields names.
 
         link : bool
             Whether to link the linkable values. Defaults to True.
@@ -1199,9 +1227,9 @@ class Results(object):
         """
         frame = self.frame.copy()
         new_dict = {}
-        for value_space in self.reg.value_spaces:
-            value = [*self.to_list(value_space, link=link)]
-            name = (value_space, self.reg.value_spaces[value_space])[root_names]
+        for field in self.system.fields:
+            value = [*self.to_list(field, link=link)]
+            name = (field, self.system.fields[field])[root_names]
             new_dict.update(
                 {name: value[0] if len(value) == 1 else value}
             )
@@ -1211,14 +1239,39 @@ class Results(object):
 
     todict = to_dict
 
-    def to_list(self, value_space: str, link: bool = True) -> "list":
+    @set_sentinel(sentinel.to_keywords)
+    def to_keywords(self, transfer_target: Union[str, type]):
         """
-        Return list of all values in :value space:.
+        Create and return keywords leading to current search results.
 
         Parameters
         ----------
-        value_space : str
-            Value space to retrieve values of.
+        transfer_target: str or type
+            Target class (SIMC, TERC or ULIC).
+
+        Returns
+        -------
+        generator
+        """
+        transfer_target = (transfer_target, self.transfer_target)[True]
+        name = {}
+        if self.system.locname_field:
+            name = dict(match=re.escape(self.system.locname_field))
+        yield dict(
+            **name,
+            **self.system.search_keywords,
+            **self.system.modes
+        )
+        yield transfer_target
+
+    def to_list(self, field: str, link: bool = True) -> "list":
+        """
+        Return list of all values in :field:.
+
+        Parameters
+        ----------
+        field : str
+            field to retrieve values of.
 
         link : bool
             Whether to link the linkable values. Defaults to True.
@@ -1250,44 +1303,53 @@ class Results(object):
         list
         """
         dataframe = self.frame
-        value_space = self.reg.ensure_value_space(value_space)
+        field = self.system.ensure_field(field)
         require(
-            value_space in self.reg.value_spaces,
-            f"{value_space!r} is not a valid value space."
-            f" Available value spaces: "
-            f"{', '.join(sorted(self.reg.value_spaces.keys()))}"
+            field in self.system.fields,
+            f"{field!r} is not a valid field. "
+            f"Available fields: "
+            f"{', '.join(sorted(self.system.fields.keys()))}"
         )
-        new_list = getattr(dataframe, self.reg.value_spaces[value_space]).tolist()
-        if link and self.reg.link_manager.has_lm(value_space):
+        new_list = getattr(dataframe, self.system.fields[field]).tolist()
+        if link and self.system.link_manager.has_lm(field):
             for key_index in range(len(new_list)):
-                new = self.reg.__class__()
-                entry = new.unpack_row(dataframe=pandas.DataFrame([
+                new = self.system.__class__()
+                entry = new.unpack_row(pandas.DataFrame([
                     dataframe.loc[dataframe.index[key_index]]
                 ]))
-                new_list[key_index] = getattr(entry, value_space)
+                new_list[key_index] = getattr(entry, field)
 
         return new_list
 
-    def transfer(self, target: Union[str, type], **other) -> "Register":
-        global transfer_collector
-        keywords, transfer_target = self.to_keywords(target)
-        name = keywords['name']
-        pop = transfer_collector.pop(name, ())
-        transfer_collector[name] = pop + (
+    def transfer(
             self,
-            transfer_target.search(
-                **{**{vs: v for vs, v in other.items()
-                      if any(
-                        [vs in transfer_target.value_spaces,
-                         vs in getattr(
-                             transfer_target, 'bool_and_str_arguments')]
-                    )}, **keywords}
-            ))
-        return transfer_collector[name][-1]
+            key: Hashable,
+            target: Union[str, type],
+            _kwt=None,
+            **other
+    ) -> "Register":
+        """ Search :target: system using keywords from this instance. """
+        global transfer_collector
+        if _kwt:
+            keywords, transfer_target = _kwt(target)
+        else:
+            keywords, transfer_target = self.to_keywords(target)
+        pop = transfer_collector.pop(key, ())
+        transfer_collector[key] = pop + (self, transfer_target.search(
+            **{**keywords, **other}))
+        return transfer_collector[key][-1]
+
+
+class EntrySentinel(object):
+    to_keywords = EntryGroupSentinel.to_keywords
 
 
 @dataclasses.dataclass(frozen=True)
 class Entry(object):
+    """
+    TERYT register entry class.
+    """
+
     system: Register
     terid: str = None
     voivodship: str = None
@@ -1307,14 +1369,62 @@ class Entry(object):
     date: str = None
     index: int = None
 
+    sentinel = EntrySentinel()
+
     @property
     def is_entry(self):
         return True
+
+    isentry = is_entry
 
     @property
     def integral(self):
         if self.integral_id:
             return self.integral_func.__call__(id=self.integral_id)
+
+    @property
+    def results(self):
+        return self.system.results
+
+    r = frame = results
+
+    @set_sentinel(sentinel.to_keywords)
+    def to_keywords(self, transfer_target: Union[str, type]):
+        """
+        Create and return keywords leading to current search results.
+
+        Parameters
+        ----------
+        transfer_target: str or type
+            Target class (SIMC, TERC or ULIC).
+
+        Returns
+        -------
+        generator
+        """
+        transfer_target = (transfer_target, self.transfer_target)[True]
+        properties = dict(self.system)
+        name_field_value = properties.pop('name')
+        prop_copy = properties.copy()
+        for k, v in prop_copy.items():
+            if k in transfer_target.fields and str(v):
+                properties[k] = str(v)
+            else:
+                properties.__delitem__(k)
+        keywords = {
+            **properties,
+            'unpacked': True,
+            'name': name_field_value,
+            'raise_for_failure': self.raise_for_failure,
+            'case': self.case
+        }
+        yield keywords
+        yield transfer_target
+
+    def transfer(self, key: Hashable, target: Union[str, type], **other) -> "Register":
+        return EntryGroup(
+            self.system, frame=self.frame
+        ).transfer(key, target, self.to_keywords, **other)
 
     def __getattribute__(self, item):
         # Register is mutable;
@@ -1329,6 +1439,7 @@ class Entry(object):
 
     def __repr__(self, indent=True):
         joiner = '\n    ' if indent else ''
+        # TODO: compress it
         return (f"{self.type}({joiner if indent else ''}" +
                 (f"name={self.name!r}, {joiner}" if self.name else "") +
                 (f"secname={self.secname!r}, {joiner}"
@@ -1364,6 +1475,8 @@ class Unit(Entry):
     def is_unit(self):
         return True
 
+    isunit = is_unit
+
 
 class Locality(Entry):
     """ SIMC entry. """
@@ -1373,6 +1486,8 @@ class Locality(Entry):
     def is_loc(self):
         return True
 
+    isloc = is_loc
+
 
 class Street(Entry):
     """ ULIC entry. """
@@ -1381,6 +1496,8 @@ class Street(Entry):
     @property
     def is_street(self):
         return True
+
+    isstreet = is_street
 
 
 entry_types = {
@@ -1413,7 +1530,7 @@ class ULIC(Register, ABC):
     """ ULIC system. """
 
 
-_data_implement(SIMC, TERC, ULIC)
+implement_specific_data(SIMC, TERC, ULIC)
 disinherit(parent=ABC, klasses=[SIMC, TERC, ULIC])  # not abstract classes
 
 most_recent = None
@@ -1467,8 +1584,8 @@ def sys_index(i, system=None, **params):
 def transfer(results, to_system=None, **keywords):
     if isinstance(to_system, type):
         raise TypeError("target system must be a Register instance or name, not type")
-    keywords = {'target': results.reg, **keywords}
-    recent = _make_recent(results.reg)
+    keywords = {'target': results.system, **keywords}
+    recent = _make_recent(results.system)
     return recent.transfer(to_system, **keywords)
 
 
@@ -1494,18 +1611,18 @@ def to_dict(system=None, from_results=True, **params):
 todict = to_dict
 
 
-def ensure_value_space(column_name, system=None):
+def ensure_field(root_name, system=None):
     if isinstance(system, type):
         raise TypeError("system must be a Register instance")
-    return _make_recent(system).ensure_value_space(column_name)
+    return _make_recent(system).ensure_field(root_name)
 
 
 search.__doc__ = Register.search.__doc__
 sys_index.__doc__ = Register.index.__doc__
-transfer.__doc__ = Results.transfer.__doc__
+transfer.__doc__ = Entry.transfer.__doc__ = EntryGroup.transfer.__doc__
 to_list.__doc__ = Register.to_list.__doc__
 to_dict.__doc__ = Register.to_dict.__doc__
-ensure_value_space.__doc__ = Register.ensure_value_space.__doc__
+ensure_field.__doc__ = Register.ensure_field.__doc__
 
 terc = Terc = TERC
 simc = Simc = SIMC
