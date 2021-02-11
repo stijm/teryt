@@ -7,7 +7,8 @@
 from types import SimpleNamespace
 
 
-COMMON = SimpleNamespace(gmitype_link_manager={
+COMMON = SimpleNamespace(
+    gmitype_link_manager={
         "miejska": "1",
         "gmina miejska": "1",
         "wiejska": "2",
@@ -86,16 +87,16 @@ TERC = SimpleNamespace(
 
 ULIC = SimpleNamespace(
     fields={
-        "voivodship": 'WOJ',
-        "powiat": 'POW',
-        "gmina": 'GMI',
-        "gmitype": 'RODZ_GMI',
-        "integral_id": 'SYM',
-        "id": 'SYM_UL',
-        "streettype": 'CECHA',
-        "name": 'NAZWA_1',
-        "secname": 'NAZWA_2',
-        "date": 'STAN_NA'
+        "voivodship": "WOJ",
+        "powiat": "POW",
+        "gmina": "GMI",
+        "gmitype": "RODZ_GMI",
+        "integral_id": "SYM",
+        "id": "SYM_UL",
+        "streettype": "CECHA",
+        "name": "NAZWA_1",
+        "secname": "NAZWA_2",
+        "date": "STAN_NA"
     },
     link_fields={
         'voivodship': 2,

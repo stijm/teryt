@@ -23,7 +23,7 @@ from typing import (
 )
 from warnings import warn
 
-from pandas import DataFrame
+from pandas import DataFrame, Series
 
 from .data.implement import (
     implement_common_data,
@@ -332,6 +332,7 @@ class GenericLinkManager(object):
 
             if value.isnumeric() and value in frame_link_manager.values:
                 value = self.link(field, value)
+                unlinkable.update({field: value})
 
             entry = Search(
                 dataframe=frame_link_manager,
@@ -347,11 +348,12 @@ class GenericLinkManager(object):
             if entry.empty:
                 raise ErroneousUnitName(f"{value!r} is not a {field}")
             index = entry.iat[0, 0]
+            self.link_indexes[field] = index
             link_result = {field: entry.iat[0, entry.columns.get_loc(
                 self.klass.fields[field]
             )]}
+            self.klass.entry_helper.update(link_result)
             unlinkable.update(link_result)
-            self.link_indexes[field] = index
 
             if field != fields[0]:
                 quantum = fields.index(field) - 1
@@ -401,7 +403,7 @@ class GenericLinkManager(object):
                 getattr(self.dict_link_managers, field + '_link_manager'
                         ).items()))[value]
 
-        if field == 'integral':  # special case
+        if field == "integral":  # special case
             new = simc()
             integral = new.search
             return integral
@@ -409,7 +411,7 @@ class GenericLinkManager(object):
         unit_link_manager = terc()
 
         if field not in self.klass.link_fields or str(value) == 'nan':
-            return ''
+            return ""
 
         keywords = {'function': self.klass.fields[field]}
         fields = list(self.klass.fields.keys())
@@ -444,10 +446,10 @@ class GenericLinkManager(object):
             by_prefix=unit_link_manager.by_prefix,
         )(search_keywords=keywords)
 
+        self.link_indexes[field] = result.iat[0, 0]
         name = result.iat[
             0, result.columns.get_loc(unit_link_manager.fields["name"])
         ]
-        self.link_indexes[field] = result.iat[0, 0]
         self.store({tuple(keywords.items()): name})
         return name
 
@@ -550,7 +552,10 @@ class SystemSentinel(object):
         klass._candidate = klass.database[:]
 
         for field in klass.search_keywords:
-            root_name = klass.fields[field]
+            root_name = klass.fields.get(field, None)
+            # KeyError: 'secname' after using ULIC
+            if not root_name:
+                continue
             klass.database[root_name] = klass.database[
                 klass.fields[field]
             ].map(str)
@@ -560,8 +565,10 @@ class SystemSentinel(object):
         if len(args) == 1:
             row = args[0]
         else:
-            row = keywords.pop("dataframe", None)
+            row = keywords.pop("row", None)
         fields = klass.fields
+        if isinstance(row, Series):
+            row = DataFrame([[*row]], columns=row.keys())
         if row is None:
             raise UnpackError("nothing to unpack from")
         if row.empty:
@@ -767,9 +774,9 @@ class System(ABC):
 
     def _dispatcher(self):
         if self._failure():
-            not_found_exctype = error_types[self.system.lower()]
+            err = error_types[self.system.lower()]
             if self.raise_for_failure:
-                raise not_found_exctype('no results found')
+                raise err('no results found')
             self.__init__()
         else:
             self.found_results = True
@@ -827,8 +834,7 @@ class System(ABC):
         -------
         Entry
         """
-        dataframe = self.database.loc[self.database["index"] == int(i)]
-        return self.unpack_row(dataframe=dataframe, link=link)
+        return self.unpack_row(row=self.database.iloc[i], link=link)
 
     get_entry = index
 
@@ -957,8 +963,6 @@ class System(ABC):
         1  76796  24  10  03  ...  Poznań  0217047  0216993  2021-01-01
         2  95778  30  64  01  ...  Poznań  0969400  0969400  2021-01-01
 
-        >>> s.search("Poznań", woj="06")
-
         Returns
         -------
         Union[Entry, EntryGroup]
@@ -1059,7 +1063,7 @@ class System(ABC):
     @set_sentinel(sentinel.unpack_row)
     def unpack_row(
             self,
-            dataframe: Union["EntryGroup", DataFrame] = None,
+            row: Union["EntryGroup", "Series", "DataFrame"] = None,
             *,
             link=True
     ) -> "Entry":
@@ -1068,8 +1072,8 @@ class System(ABC):
 
         Parameters
         ----------
-        dataframe : EntryGroup or DataFrame
-            Entry group/DataFrame with length 1 to unpack.
+        row : EntryGroup, Series or DataFrame
+            Entry group/DataFrame with length 1 or Series to unpack.
 
         link : bool
             Whether to link the linkable values.
@@ -1078,7 +1082,7 @@ class System(ABC):
         -------
         Entry
         """
-        self.link_mode = (dataframe, link)[True]
+        self.link_mode = (row, link)[True]
         for field, colname in self.fields.items():
             code = self.current_row.iat[
                 0, self.current_row.columns.get_loc(colname)
@@ -1090,7 +1094,7 @@ class System(ABC):
                     value = self.link_manager.link(field, code)
                     index = self.link_manager.link_indexes.get(
                         field, None)
-                    if index:
+                    if index is not None:
                         self.entry_helper[field] = UnitLink(
                             code=code, value=value, index=index)
                     else:
@@ -1207,12 +1211,10 @@ class EntryGroup(object):
         return repr(self.frame)
 
     def get_entry(self, number, link=True):
-        dataframe = self.frame.reset_index()
-        dataframe = dataframe.loc[dataframe["level_0"] == number]
-        dataframe = dataframe.drop(columns=["level_0"])
-        return (lambda: dataframe,
+        series = self.frame.iloc[number]
+        return (lambda: series,
                 lambda: self.system.__class__().unpack_row
-                (dataframe)
+                (series)
                 )[link]()
 
     def to_dict(
@@ -1295,8 +1297,6 @@ class EntryGroup(object):
         --------
         >>> warsaw = simc().search("Warszawa", gmitype="wiejska", woj="04")
         >>> warsaw
-        SIMC()
-        Results:
            index WOJ POW GMI  ...     NAZWA      SYM   SYMPOD     STAN_NA
         0   4810  04  14  05  ...  Warszawa  1030760  0090316  2021-01-01
         1   5699  04  04  03  ...  Warszawa  0845000  0844991  2021-01-01
@@ -1343,7 +1343,10 @@ class EntryGroup(object):
             _kwt=None,
             **other
     ) -> "System":
-        """ Search :target: system using keywords from this instance. """
+        """
+        Search :target: system using search keywords
+        and modes from this instance.
+        """
         global transfer_collector
         if _kwt:
             keywords, transfer_target = _kwt(target)
@@ -1420,8 +1423,8 @@ class Entry(object):
         transfer_target = (transfer_target, self.transfer_target)[True]
         properties = dict(self.system)
         name_field_value = properties.pop('name')
-        prop_copy = properties.copy()
-        for k, v in prop_copy.items():
+        copy = properties.copy()
+        for k, v in copy.items():
             if k in transfer_target.fields and str(v):
                 properties[k] = str(v)
             else:
@@ -1518,6 +1521,14 @@ class Street(Entry):
         return True
 
     isstreet = is_street
+
+    @property
+    def fullname(self):
+        return " ".join(
+            map(str, compress(
+                [self.streettype, self.secname, self.name],
+                [True, bool(self.secname), True]
+            )))
 
 
 entry_types = {
