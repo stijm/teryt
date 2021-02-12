@@ -16,7 +16,7 @@ from .core import (
     error_types,
     FrameLinkManagers,
     sys_index,
-    Link,
+    SemanticLink,
     link_types,
     Locality,
     LocalityLink,

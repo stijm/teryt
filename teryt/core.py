@@ -13,6 +13,7 @@
 import dataclasses
 import re
 import typing
+
 from abc import ABC
 from itertools import compress
 from math import factorial
@@ -22,7 +23,6 @@ from typing import (
     Union,
 )
 from warnings import warn
-
 from pandas import DataFrame, Series
 
 from .data.implement import (
@@ -63,8 +63,8 @@ def transferred_searches(key):
 
 
 @dataclasses.dataclass(frozen=True)
-class Link(object):
-    """ TERYT Link. """
+class SemanticLink(object):
+    """ TERYT semantic Link. """
 
     code: str
     value: typing.Any
@@ -94,7 +94,7 @@ class Link(object):
 
 
 @dataclasses.dataclass(frozen=True)
-class UnitLink(Link):
+class UnitLink(SemanticLink):
     """ Link to Unit. """
     index: int
 
@@ -108,7 +108,7 @@ class UnitLink(Link):
 
 
 @dataclasses.dataclass(frozen=True)
-class LocalityLink(Link):
+class LocalityLink(SemanticLink):
     """ Link to Locality. """
     index: int
 
@@ -168,6 +168,7 @@ class Search(object):
     def search(self, search_keywords) -> "DataFrame":
         # TODO: no shuffling by itself, it should be itertools.product.
         self.search_keywords = search_keywords
+        print('searching:\n' + repr(self.candidate))
 
         def locname_search():
             """
@@ -773,6 +774,7 @@ class System(ABC):
                  if self.found_results else ""))
 
     def _dispatcher(self):
+        candidate = self._candidate.reset_index()
         if self._failure():
             err = error_types[self.system.lower()]
             if self.raise_for_failure:
@@ -780,8 +782,7 @@ class System(ABC):
             self.__init__()
         else:
             self.found_results = True
-            self._results = EntryGroup(
-                self, self._candidate.reset_index())
+            self._results = EntryGroup(self, candidate)
             self._results.frame = self._results.frame.drop(columns=["level_0"])
             if (len(self.r) == 1 or self.force_unpack) and self.unpack_mode:
                 return self.unpack_row(self.results)
@@ -1098,14 +1099,8 @@ class System(ABC):
                         self.entry_helper[field] = UnitLink(
                             code=code, value=value, index=index)
                     else:
-                        self.entry_helper[field] = Link(
+                        self.entry_helper[field] = SemanticLink(
                             code=code, value=value)
-
-        # TODO: move this somewhere else…
-        if "integral_id" in self.entry_helper:
-            self.entry_helper[
-                "integral_func"] = self.link_manager.link(
-                "integral", self.entry_helper["integral_id"])
 
         self.entry_helper["terid"] = self.pack_terid(**self.entry_helper)
         self.unpacked = True
@@ -1365,7 +1360,7 @@ class EntrySentinel(object):
 @dataclasses.dataclass(frozen=True)
 class Entry(object):
     """
-    TERYT register entry class.
+    System entry class.
     """
 
     system: System
@@ -1381,7 +1376,6 @@ class Entry(object):
     secname: str = None
     function: str = None
     id: str = None
-    integral_func: type(lambda: None) = (lambda: None)
     integral_id: str = None
     row: DataFrame = None
     date: str = None
@@ -1398,7 +1392,14 @@ class Entry(object):
     @property
     def integral(self):
         if self.integral_id:
-            return self.integral_func.__call__(id=self.integral_id)
+            with simc() as integral_manager:
+                integral = integral_manager.search(id=self.integral_id)
+                print(integral)
+                return LocalityLink(
+                    code=integral.id,
+                    value=integral.name,
+                    index=integral.index
+                )
 
     @property
     def results(self):
