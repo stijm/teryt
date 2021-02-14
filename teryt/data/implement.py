@@ -106,6 +106,14 @@ ULIC = SimpleNamespace(
     }
 )
 
+
+function_dict = {
+    "WOJ": "województwo",
+    "POW": "powiat",
+    "GMI": "gmina",
+}
+
+
 klass_name_dict = {
     "COMMON": COMMON,
     "SIMC": SIMC,

@@ -42,7 +42,7 @@ def ensure_column(item, frame) -> Series:
             )[isinstance(item, Series)]()
 
 
-def set_sentinel(priority) -> type(lambda: None):
+def set_broker(priority) -> type(lambda: None):
     """
     Precede the function to be decorated with another function,
     e.g. to check the arguments given to the function.
@@ -97,11 +97,11 @@ class FrameSearch(object):
     def name(
             self,
             *,
-            col: (Series, str),
+            root: (Series, str),
             value: str,
             case: bool
     ):
-        col = ensure_column(col, self.frame)
+        col = ensure_column(root, self.frame)
         return self.frame.loc[
             (col == value) if case or not isinstance(value, str)
             else (col.str.lower() == value.lower())
@@ -112,11 +112,11 @@ class FrameSearch(object):
     def match(
             self,
             *,
-            col: (Series, str),
+            root: (Series, str),
             value: str,
             case: bool
     ):
-        col = ensure_column(col, self.frame)
+        col = ensure_column(root, self.frame)
         return self.frame.loc[
             (col.str.match(value, case=case))
         ]
@@ -124,12 +124,12 @@ class FrameSearch(object):
     def contains(
             self,
             *,
-            col: (Series, str),
+            root: (Series, str),
             value: str,
             case: bool
     ):
         value = escape(str(value))
-        col = ensure_column(col, self.frame)
+        col = ensure_column(root, self.frame)
         return self.frame.loc[
             (col.str.contains(value, case=case, na=False))
         ]
@@ -137,11 +137,11 @@ class FrameSearch(object):
     def startswith(
             self,
             *,
-            col: (Series, str),
+            root: (Series, str),
             value: str,
             case: bool
     ):
-        col = ensure_column(col, self.frame)
+        col = ensure_column(root, self.frame)
         return self.frame.loc[
             (col.str.startswith(value, na=False))
             if case else
@@ -151,11 +151,11 @@ class FrameSearch(object):
     def endswith(
             self,
             *,
-            col: (Series, str),
+            root: (Series, str),
             value: str,
             case: bool
     ):
-        col = ensure_column(col, self.frame)
+        col = ensure_column(root, self.frame)
         return self.frame.loc[
             (col.str.endswith(value, na=False))
             if case else

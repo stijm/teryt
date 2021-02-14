@@ -10,11 +10,17 @@
 # - System.to_xml
 # - System.results.to_xml
 
+# TODO: rewrite the searching algorithm,
+#  improve caching,
+#  add teritorial division unit hierarchy and put it in a tree.
+
 import dataclasses
 import re
 import typing
 
 from abc import ABC
+from concurrent.futures import ThreadPoolExecutor
+
 from itertools import compress
 from math import factorial
 from typing import (
@@ -25,7 +31,9 @@ from typing import (
 from warnings import warn
 from pandas import DataFrame, Series
 
+from .data import na_char
 from .data.implement import (
+    function_dict,
     implement_common_data,
     implement_specific_data
 )
@@ -45,7 +53,7 @@ from .exceptions import (
 from .tools import (
     disinherit,
     require,
-    set_sentinel,
+    set_broker,
     StringCaseFoldTuple,
     FrameSearch
 )
@@ -132,117 +140,100 @@ class Search(object):
             search_mode: str,
             fields: Union[dict, property],
             case: bool,
-            by_possession: typing.Iterable,
-            by_prefix: typing.Iterable,
-            locname: str = '',
+            posmethod: typing.Iterable,
+            prefmethod: typing.Iterable,
+            name: str = '',
     ):
         """ Constructor. """
-        self.dataframe = dataframe
-        self.candidate = self.dataframe.copy()
-        self.frames = [self.candidate]
-        self.database_name = system
+        self.database = dataframe
+        self.system = system
+        self.current = self.database.copy()
+        self.frames = [self.current]
         self.search_mode = search_mode
         self.fields = fields
         self.case = case
         self.search_keywords = {}
         self.ineffective = ''
-        self.locname = locname
-        self.by_possession = by_possession
-        self.by_prefix = by_prefix
+        self.name = name
+        self.posmethod = posmethod
+        self.prefmethod = prefmethod
+        self.attempts = 0
+        self.max_attempts = 0
+        self._done = False
 
-    def failure(self):
+    def _failure(self):
         """ Was anything found? """
-        return self.candidate.empty or self.candidate.equals(self.dataframe)
+        return self.current.empty or self.current.equals(self.database)
 
-    def move_key(self):
-        keys = [*self.search_keywords.keys()]
-        values = [*self.search_keywords.values()]
-        ineffective_key_index = keys.index(self.ineffective)
-        ineffective_value = values[ineffective_key_index]
-        del keys[ineffective_key_index], values[ineffective_key_index]
-        keys.insert(ineffective_key_index + 1, self.ineffective)
-        values.insert(ineffective_key_index + 1, ineffective_value)
-        self.search_keywords = dict(zip(keys, values))
-        return self.search_keywords
+    def _lookup(self):
+        for field, query in (*self.search_keywords.items(),):
+            if field == 'voivodship':
+                query = query.upper()
+            self.attempts += 1
+            if field not in self.fields:
+                continue
+            root = self.fields[field]
+            keyword_args = dict(
+                root=root,
+                value=str(query),
+                case=self.case
+            )
+            method = 'name'
+            if field in self.posmethod:
+                method = 'contains'
+            elif field in self.prefmethod:
+                method = 'startswith'
+
+            self.current = getattr(
+                FrameSearch(self.current),
+                method
+            )(**keyword_args)
+
+            if self._failure():
+                if self.current.equals(self.database):
+                    no_uniqueness = f'It seems that all values in ' \
+                                    f'{field!r} field ' \
+                                    f'are equal to {query!r}. Try ' \
+                                    f'using more unique key words.'
+                    warn(no_uniqueness, category=UserWarning)
+                self.current = self.frames[-1]
+                if self.attempts <= self.max_attempts:
+                    self.search_keywords[field] = self.search_keywords.pop(field)
+                    self._lookup()
+                else:
+                    self._done = True
+                    break
+            self.frames.append(self.current)
+
+    def _name_lookup(self):
+        self.current = getattr(
+            FrameSearch(self.current),
+            self.search_mode
+        )(root=self.fields["name"],
+          value=self.name,
+          case=self.case)
+
+        self.frames.append(self.current)
 
     def search(self, search_keywords) -> "DataFrame":
         # TODO: no shuffling by itself, it should be itertools.product.
         self.search_keywords = search_keywords
-        print('searching:\n' + repr(self.candidate))
+        self.max_attempts = factorial(len(self.search_keywords))
 
-        def locname_search():
-            """
-            Search for locality name.
-            """
-            self.candidate = getattr(
-                FrameSearch(self.candidate),
-                self.search_mode
-            )(col=self.fields['name'],
-              value=self.locname,
-              case=self.case)
-
-            self.frames.append(self.candidate)
-
-        if self.search_mode != 'no_locname':
-            locname_search()
-            if self.failure():
+        if self.search_mode != "NO_NAME":
+            self._name_lookup()
+            if self._failure():
                 return DataFrame()
 
-        attempts = 0
-        max_attempts = factorial(len(self.search_keywords))
-        done = False
-
-        def search_loop():
-            nonlocal self, attempts, done
-            for field, query in self.search_keywords.items():
-                if field == 'voivodship':
-                    query = query.upper()
-                attempts += 1
-                if field not in self.fields:
-                    continue
-                root = self.fields[field]
-                keyword_args = dict(
-                    col=root,
-                    value=str(query),
-                    case=self.case
-                )
-                frame_query = 'name'
-                if field in self.by_possession:
-                    frame_query = 'contains'
-                elif field in self.by_prefix:
-                    frame_query = 'startswith'
-
-                self.candidate = getattr(
-                    FrameSearch(self.candidate),
-                    frame_query
-                )(**keyword_args)
-
-                if self.failure():
-                    if self.candidate.equals(self.dataframe):
-                        no_uniqueness = f'It seems that all values in ' \
-                                        f'{field!r} field ' \
-                                        f'are equal to {query!r}. Try ' \
-                                        f'using more unique key words.'
-                        warn(no_uniqueness, category=UserWarning)
-                    self.candidate = self.frames[-1]
-                    if attempts <= max_attempts:
-                        self.ineffective = field
-                        self.move_key()
-                        search_loop()
-                    else:
-                        done = True
-                        break
-                self.frames.append(self.candidate)
-
-        if not done:
-            search_loop()
-        return self.candidate
+        if not self._done:
+            self._lookup()
+        return self.current
 
     def __call__(self, search_keywords: dict):
         return self.search(search_keywords=search_keywords)
 
 
-class GenericLinkManagerSentinel(object):
+class GenericLinkManagerBroker(object):
     def __init__(self):
         self.linkable_args = {}
         self.unlinkable_args = {}
@@ -290,22 +281,20 @@ class GenericLinkManager(object):
     klass: "System"
     dict_link_managers: "DictLinkManagers"
     frame_link_managers: "FrameLinkManagers"
-    cache: dict
 
-    sentinel = GenericLinkManagerSentinel()
+    broker = GenericLinkManagerBroker()
 
-    def __init__(self, klass, dict_link_managers, frame_link_managers, cache):
+    def __init__(self, klass, dict_link_managers, frame_link_managers):
         self.klass = klass
         self.dict_link_managers = dict_link_managers
         self.frame_link_managers = frame_link_managers
-        self.cache = cache
-        self.store = self.cache.update
+        self.store = self.klass.cache[self.klass.system].update
         self.link_indexes = {}
 
-    @set_sentinel(sentinel.link_names)
+    @set_broker(broker.link_names)
     def link_names(self, **_keywords):
-        linkable = self.sentinel.linkable_args
-        unlinkable = self.sentinel.unlinkable_args
+        linkable = self.broker.linkable_args
+        unlinkable = self.broker.unlinkable_args
         extract = unlinkable.copy()
         for field in unlinkable.keys():
             if field not in self.klass.terc.columns:
@@ -341,14 +330,15 @@ class GenericLinkManager(object):
                 search_mode="equal",
                 fields=terc.fields,
                 case=False,
-                by_possession=terc.by_possession,
-                by_prefix=terc.by_prefix,
-                locname=value
+                posmethod=terc.posmethod,
+                prefmethod=terc.prefmethod,
+                name=value
             )(search_keywords=unlinkable)
 
             if entry.empty:
                 raise ErroneousUnitName(f"{value!r} is not a {field}")
             index = entry.iat[0, 0]
+            print(index)
             self.link_indexes[field] = index
             link_result = {field: entry.iat[0, entry.columns.get_loc(
                 self.klass.fields[field]
@@ -379,7 +369,7 @@ class GenericLinkManager(object):
             field
         )
 
-    @set_sentinel(sentinel.link)
+    @set_broker(broker.link)
     def link(self, field: str, value: str):
         """
         Resolve locality that value in field refers to,
@@ -411,10 +401,10 @@ class GenericLinkManager(object):
 
         unit_link_manager = terc()
 
-        if field not in self.klass.link_fields or str(value) == 'nan':
+        if field not in self.klass.link_fields or str(value) == na_char:
             return ""
 
-        keywords = {'function': self.klass.fields[field]}
+        keywords = {'function': function_dict[self.klass.fields[field]]}
         fields = list(self.klass.fields.keys())
         helper = self.klass.entry_helper
 
@@ -432,19 +422,21 @@ class GenericLinkManager(object):
 
         if field != fields[-1]:
             next_value = fields[fields.index(field) + 1]
-            keywords[next_value] = 'nan'
+            keywords[next_value] = na_char
 
-        if tuple(keywords.items()) in self.cache:
-            return self.cache[tuple(keywords.items())]
+        cache = self.klass.cache[self.klass.system]
+
+        if tuple(keywords.items()) in cache:
+            return cache[tuple(keywords.items())]
 
         result = Search(
             dataframe=unit_link_manager.database,
             system=unit_link_manager.system,
-            search_mode='no_locname',
+            search_mode='NO_NAME',
             fields=unit_link_manager.fields,
             case=False,
-            by_possession=unit_link_manager.by_possession,
-            by_prefix=unit_link_manager.by_prefix,
+            posmethod=unit_link_manager.posmethod,
+            prefmethod=unit_link_manager.prefmethod,
         )(search_keywords=keywords)
 
         self.link_indexes[field] = result.iat[0, 0]
@@ -465,7 +457,7 @@ class GenericLinkManager(object):
             raise
 
 
-class SystemSentinel(object):
+class SystemBroker(object):
     @staticmethod
     def search(klass, arguments, keywords):
         klass.__init__(**klass.modes)
@@ -522,15 +514,15 @@ class SystemSentinel(object):
                             (' and '.join(map('%s'.__mod__, conflicted))))
                     conflict.append(keyword)
 
-        klass.locname_field, klass.force_unpack = None, False
-        modes = klass.locname_keywords + ('no_locname',)
+        klass.name_field, klass.force_unpack = None, False
+        modes = klass.locname_keywords + ('NO_NAME',)
         klass.search_mode = modes[-1]
 
         for keyword in keywords.copy():
             for mode in klass.locname_keywords:
                 if keyword == mode:
                     klass.search_mode = mode
-                    klass.locname_field = keywords[mode]
+                    klass.name_field = keywords[mode]
                     del keywords[mode]
 
         klass.raise_for_failure = keywords.pop("raise_for_failure",
@@ -550,7 +542,7 @@ class SystemSentinel(object):
             [keywords.__setitem__(n, v) for n, v in unpacked.items() if v]
 
         klass.search_keywords = keywords
-        klass._candidate = klass.database[:]
+        klass._current = klass.database[:]
 
         for field in klass.search_keywords:
             root_name = klass.fields.get(field, None)
@@ -589,7 +581,7 @@ class SystemSentinel(object):
                     f"{fields[field]!r}) "
                     f"not in source DataFrame"
                 )
-        klass.current_row = row
+        klass.current = row
 
 
 class DictLinkManagers(object):
@@ -614,10 +606,16 @@ class FrameLinkManagers(object):
 class System(ABC):
     __slots__ = ()
 
-    by_possession = (
+    cache = {
+        "simc": {},
+        "terc": {},
+        "ulic": {}
+    }
+
+    posmethod = (
         "function",
     )
-    by_prefix = (
+    prefmethod = (
         "date",  # TODO: this should be a datetime argument
     )
     locname_keywords = (
@@ -651,7 +649,7 @@ class System(ABC):
         f"Try looking for the proper argument name " \
         f"in the following list:\n{' ' * 12}%s."
 
-    sentinel = SystemSentinel()
+    broker = SystemBroker()
 
     def __init__(
             self,
@@ -702,19 +700,19 @@ class System(ABC):
         if self.database is None:
             raise ValueError(f"invalid system {self.system!r}")
         self.database = self.database.reset_index()
-        self._candidate = None
+        self._current = None
 
         # Root names
         self.root_names = self.roots = [*self.database.columns]
 
         # Searching
-        self.locname_field = None
+        self.name_field = None
         self.search_mode = None
         self.search_keywords = {}
         self.found_results = False
         self.unpacked = False
         self.linked = False
-        self.current_row = DataFrame()
+        self.current = DataFrame()
         self._results = EntryGroup(self)
 
         # Transferring
@@ -724,14 +722,12 @@ class System(ABC):
         self.entry_helper = {}
 
         # Caching
-        self.cache = {}
-        self.store = self.cache.update
+        self.store = self.__class__.cache[self.system].update
 
         if link:
             self.link_manager = GenericLinkManager(
                 dict_link_managers=DictLinkManagers(self),
                 frame_link_managers=System.frame_link_managers,
-                cache=self.cache,
                 klass=self
             )
 
@@ -774,7 +770,7 @@ class System(ABC):
                  if self.found_results else ""))
 
     def _dispatcher(self):
-        candidate = self._candidate.reset_index()
+        current = self._current.reset_index()
         if self._failure():
             err = error_types[self.system.lower()]
             if self.raise_for_failure:
@@ -782,7 +778,7 @@ class System(ABC):
             self.__init__()
         else:
             self.found_results = True
-            self._results = EntryGroup(self, candidate)
+            self._results = EntryGroup(self, current)
             self._results.frame = self._results.frame.drop(columns=["level_0"])
             if (len(self.r) == 1 or self.force_unpack) and self.unpack_mode:
                 return self.unpack_row(self.results)
@@ -790,7 +786,7 @@ class System(ABC):
 
     @final
     def _failure(self):
-        return self._candidate.empty or self._candidate.equals(self.database)
+        return self._current.empty or self._current.equals(self.database)
 
     @final
     def ensure_field(self, name):
@@ -835,6 +831,8 @@ class System(ABC):
         -------
         Entry
         """
+        if (len(self.database) - 1) < i:
+            raise ValueError(f"index too large (max: {len(self.database) - 1})")
         return self.unpack_row(row=self.database.iloc[i], link=link)
 
     get_entry = index
@@ -875,7 +873,7 @@ class System(ABC):
         """
         return ''.join(map(str, map(
             lambda field: info.get(field, ""),
-            filter(lambda x: str(x) != 'nan', self.link_fields)
+            filter(lambda x: str(x) != na_char, self.link_fields)
         )))
 
     @property
@@ -891,7 +889,7 @@ class System(ABC):
 
     r = res = results
 
-    @set_sentinel(sentinel.search)
+    @set_broker(broker.search)
     def search(
             self,
             *args,  # noqa for autocompletion
@@ -975,15 +973,15 @@ class System(ABC):
         # TODO: Unit, Locality and Street objects should be also legal
         #       as search keywords. (09-02-2021)
         #
-        self._candidate = Search(
+        self._current = Search(
             dataframe=self.database,
             system=self.system,
             search_mode=self.search_mode,
             fields=self.fields,
             case=self.case,
-            locname=self.locname_field,
-            by_possession=self.by_possession,
-            by_prefix=self.by_prefix
+            name=self.name_field,
+            posmethod=self.posmethod,
+            prefmethod=self.prefmethod
         )(search_keywords=self.search_keywords)
 
         return self._dispatcher()
@@ -1061,7 +1059,25 @@ class System(ABC):
 
         return all([field in self.fields, field not in other_fields])
 
-    @set_sentinel(sentinel.unpack_row)
+    def _treat_data_chunk(self, field, root):
+        code = self.current.iat[
+            0, self.current.columns.get_loc(root)
+        ]
+
+        if str(code) != na_char:
+            self.entry_helper[field] = code
+            if self.link_manager.has_lm(field) and self.link_mode:
+                value = self.link_manager.link(field, code)
+                index = self.link_manager.link_indexes.get(
+                    field, None)
+                if index is not None:
+                    self.entry_helper[field] = UnitLink(
+                        code=code, value=value, index=index)
+                else:
+                    self.entry_helper[field] = SemanticLink(
+                        code=code, value=value)
+
+    @set_broker(broker.unpack_row)
     def unpack_row(
             self,
             row: Union["EntryGroup", "Series", "DataFrame"] = None,
@@ -1084,31 +1100,15 @@ class System(ABC):
         Entry
         """
         self.link_mode = (row, link)[True]
-        for field, colname in self.fields.items():
-            code = self.current_row.iat[
-                0, self.current_row.columns.get_loc(colname)
-            ]
-
-            if str(code) != 'nan':
-                self.entry_helper[field] = code
-                if self.link_manager.has_lm(field) and self.link_mode:
-                    value = self.link_manager.link(field, code)
-                    index = self.link_manager.link_indexes.get(
-                        field, None)
-                    if index is not None:
-                        self.entry_helper[field] = UnitLink(
-                            code=code, value=value, index=index)
-                    else:
-                        self.entry_helper[field] = SemanticLink(
-                            code=code, value=value)
-
+        for chunk in self.fields.items():
+            self._treat_data_chunk(*chunk)
         self.entry_helper["terid"] = self.pack_terid(**self.entry_helper)
         self.unpacked = True
         return entry_types[self.system].__call__(
             system=self,
             **self.entry_helper,
-            row=self.current_row,
-            index=self.current_row.iat[0, 0]
+            row=self.current,
+            index=self.current.iat[0, 0]
         )
 
     def unpack_terid(self, teritorial_id: str, errors: bool = True) -> "dict":
@@ -1169,7 +1169,7 @@ class System(ABC):
 implement_common_data(System)
 
 
-class EntryGroupSentinel(object):
+class EntryGroupBroker(object):
     @staticmethod
     def to_keywords(klass, arguments, _kwds):
         require(arguments, "to_keywords(): no arguments")
@@ -1184,7 +1184,7 @@ class EntryGroupSentinel(object):
 
 
 class EntryGroup(object):
-    sentinel = EntryGroupSentinel()
+    broker = EntryGroupBroker()
 
     def __contains__(self, item):
         return self.frame.__contains__(item)
@@ -1251,7 +1251,7 @@ class EntryGroup(object):
 
     todict = to_dict
 
-    @set_sentinel(sentinel.to_keywords)
+    @set_broker(broker.to_keywords)
     def to_keywords(self, transfer_target: Union[str, type]):
         """
         Create and return keywords leading to current search results.
@@ -1267,14 +1267,22 @@ class EntryGroup(object):
         """
         transfer_target = (transfer_target, self.transfer_target)[True]
         name = {}
-        if self.system.locname_field:
-            name = dict(match=re.escape(self.system.locname_field))
+        if self.system.name_field:
+            name = dict(match=re.escape(self.system.name_field))
         yield dict(
             **name,
             **self.system.search_keywords,
             **self.system.modes
         )
         yield transfer_target
+
+    def _form_root(self, root_index):
+        new = self.system.__class__()
+        entry = new.unpack_row(DataFrame([
+            self.frame.loc[self.frame.index[root_index]]
+        ]))
+        self.__class__._form_root.new_list[root_index] = getattr(  # noqa
+            entry, self.__class__._form_root.field)  # noqa
 
     def to_list(self, field: str, link: bool = True) -> "list":
         """
@@ -1312,22 +1320,17 @@ class EntryGroup(object):
         -------
         list
         """
-        dataframe = self.frame
         field = self.system.ensure_field(field)
-        require(
-            field in self.system.fields,
-            f"{field!r} is not a valid field. "
-            f"Available fields: "
-            f"{', '.join(sorted(self.system.fields.keys()))}"
-        )
-        new_list = getattr(dataframe, self.system.fields[field]).tolist()
+        if field not in self.system.fields:
+            raise ValueError(f"{field!r} is not a valid field. "
+                             f"Available fields: "
+                             f"{', '.join(sorted(self.system.fields.keys()))}")
+        new_list = getattr(self.frame, self.system.fields[field]).tolist()
         if link and self.system.link_manager.has_lm(field):
-            for key_index in range(len(new_list)):
-                new = self.system.__class__()
-                entry = new.unpack_row(DataFrame([
-                    dataframe.loc[dataframe.index[key_index]]
-                ]))
-                new_list[key_index] = getattr(entry, field)
+            self.__class__._form_root.new_list = new_list
+            self.__class__._form_root.field = field
+            with ThreadPoolExecutor() as exe:
+                exe.map(self._form_root, range(len(new_list)))
 
         return new_list
 
@@ -1353,8 +1356,8 @@ class EntryGroup(object):
         return transfer_collector[key][-1]
 
 
-class EntrySentinel(object):
-    to_keywords = EntryGroupSentinel.to_keywords
+class EntryBroker(object):
+    to_keywords = EntryGroupBroker.to_keywords
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1381,7 +1384,7 @@ class Entry(object):
     date: str = None
     index: int = None
 
-    sentinel = EntrySentinel()
+    broker = EntryBroker()
 
     @property
     def is_entry(self):
@@ -1394,7 +1397,6 @@ class Entry(object):
         if self.integral_id:
             with simc() as integral_manager:
                 integral = integral_manager.search(id=self.integral_id)
-                print(integral)
                 return LocalityLink(
                     code=integral.id,
                     value=integral.name,
@@ -1407,7 +1409,7 @@ class Entry(object):
 
     r = res = frame = results
 
-    @set_sentinel(sentinel.to_keywords)
+    @set_broker(broker.to_keywords)
     def to_keywords(self, transfer_target: Union[str, type]):
         """
         Create and return keywords leading to current search results.
@@ -1617,8 +1619,8 @@ def transfer(results, to_system=None, **keywords):
     if isinstance(to_system, type):
         raise TypeError("target system must be a "
                         "System instance or name, not type")
-    keywords = {'target': results.system, **keywords}
-    recent = _make_recent(results.system)
+    keywords = {'target': results.database, **keywords}
+    recent = _make_recent(results.database)
     return recent.transfer(to_system, **keywords)
 
 

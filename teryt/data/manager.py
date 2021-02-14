@@ -6,6 +6,7 @@
 
 import os
 import pandas
+from . import na_char
 from ..exceptions import MissingResourcesError as MRes
 
 directory = os.path.abspath(os.path.dirname(__file__))
@@ -50,3 +51,8 @@ read_csv_params = {
 simc_data = pandas.read_csv(resource_file("simc"), **read_csv_params)
 terc_data = pandas.read_csv(resource_file("terc"), **read_csv_params)
 ulic_data = pandas.read_csv(resource_file("ulic"), **read_csv_params)
+
+databases = [simc_data, ulic_data, terc_data]
+
+for database in databases:
+    database.fillna(na_char, inplace=True)
