@@ -15,10 +15,6 @@ import re
 import typing
 
 from abc import ABC
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    as_completed  # noqa
-)
 from itertools import compress
 from math import factorial
 from typing import (
@@ -28,7 +24,6 @@ from typing import (
 )
 from warnings import warn
 from pandas import DataFrame, Series
-from numpy import nan
 
 from .data.implement import (
     implement_common_data,
@@ -56,7 +51,6 @@ from .tools import (
 )
 
 systems = StringCaseFoldTuple(('simc', 'terc', 'ulic'))
-nafill = "-"
 transfer_collector = {}
 
 
@@ -129,16 +123,11 @@ class LocalityLink(SemanticLink):
 
 class Search(object):
     """ TERYT searching algorithm class. """
-    scopes = {
-        "simc": {},
-        "terc": {},
-        "ulic": {}
-    }
 
     def __init__(
             self,
             *,
-            database: DataFrame,
+            dataframe: DataFrame,
             system: str,
             search_mode: str,
             fields: Union[dict, property],
@@ -148,10 +137,9 @@ class Search(object):
             locname: str = '',
     ):
         """ Constructor. """
-        self.system = system
-        self.database = database
-        self.database.fillna(inplace=True, value=nafill)
-        self.candidate = self.database.copy()
+        self.dataframe = dataframe
+        self.candidate = self.dataframe.copy()
+        self.frames = [self.candidate]
         self.database_name = system
         self.search_mode = search_mode
         self.fields = fields
@@ -164,47 +152,36 @@ class Search(object):
 
     def failure(self):
         """ Was anything found? """
-        return self.candidate.empty or self.candidate.equals(self.database)
+        return self.candidate.empty or self.candidate.equals(self.dataframe)
 
     def move_key(self):
-        print(f"INEFFECTIVE: {self.ineffective} {self.search_keywords}")
-        self.search_keywords.pop(self.ineffective)
+        keys = [*self.search_keywords.keys()]
+        values = [*self.search_keywords.values()]
+        ineffective_key_index = keys.index(self.ineffective)
+        ineffective_value = values[ineffective_key_index]
+        del keys[ineffective_key_index], values[ineffective_key_index]
+        keys.insert(ineffective_key_index + 1, self.ineffective)
+        values.insert(ineffective_key_index + 1, ineffective_value)
+        self.search_keywords = dict(zip(keys, values))
         return self.search_keywords
 
     def search(self, search_keywords) -> "DataFrame":
         # TODO: no shuffling by itself, it should be itertools.product.
         self.search_keywords = search_keywords
-        if "gmitype" in self.search_keywords:
-            if self.search_keywords["gmitype"] == nafill:
-                self.search_keywords.pop("gmitype")
-
-        def get_scope(kw):
-            items = tuple(kw.items())
-            if items in self.scopes[self.system]:
-                scope = self.scopes[self.system][items]
-            return self.database
-
-        def save_scope(kw, scope):
-            items = tuple(kw.items())
-            self.scopes[self.system].update({
-                items: scope
-            })
+        print('searching:\n' + repr(self.candidate))
 
         def locname_search():
             """
             Search for locality name.
             """
-            kw = dict(
-                col=self.fields['name'],
-                value=self.locname,
-                case=self.case
-            )
             self.candidate = getattr(
                 FrameSearch(self.candidate),
                 self.search_mode
-            )(**kw)
+            )(col=self.fields['name'],
+              value=self.locname,
+              case=self.case)
 
-            save_scope(kw, self.candidate)
+            self.frames.append(self.candidate)
 
         if self.search_mode != 'no_locname':
             locname_search()
@@ -225,7 +202,7 @@ class Search(object):
                     continue
                 root = self.fields[field]
                 keyword_args = dict(
-                    root=root,
+                    col=root,
                     value=str(query),
                     case=self.case
                 )
@@ -236,18 +213,18 @@ class Search(object):
                     frame_query = 'startswith'
 
                 self.candidate = getattr(
-                    FrameSearch(get_scope(keyword_args)),
+                    FrameSearch(self.candidate),
                     frame_query
                 )(**keyword_args)
 
                 if self.failure():
-                    if self.candidate.equals(self.database):
+                    if self.candidate.equals(self.dataframe):
                         no_uniqueness = f'It seems that all values in ' \
                                         f'{field!r} field ' \
                                         f'are equal to {query!r}. Try ' \
                                         f'using more unique key words.'
                         warn(no_uniqueness, category=UserWarning)
-                    self.candidate = self.scopes[self.system][-1]
+                    self.candidate = self.frames[-1]
                     if attempts <= max_attempts:
                         self.ineffective = field
                         self.move_key()
@@ -255,7 +232,7 @@ class Search(object):
                     else:
                         done = True
                         break
-                save_scope(self.search_keywords, self.candidate)
+                self.frames.append(self.candidate)
 
         if not done:
             search_loop()
@@ -317,11 +294,12 @@ class GenericLinkManager(object):
 
     sentinel = GenericLinkManagerSentinel()
 
-    def __init__(self, klass, dict_link_managers, frame_link_managers):
+    def __init__(self, klass, dict_link_managers, frame_link_managers, cache):
         self.klass = klass
         self.dict_link_managers = dict_link_managers
         self.frame_link_managers = frame_link_managers
-        self.store = self.klass.cache[self.klass.system].update
+        self.cache = cache
+        self.store = self.cache.update
         self.link_indexes = {}
 
     @set_sentinel(sentinel.link_names)
@@ -358,7 +336,7 @@ class GenericLinkManager(object):
                 unlinkable.update({field: value})
 
             entry = Search(
-                database=frame_link_manager,
+                dataframe=frame_link_manager,
                 system="terc",
                 search_mode="equal",
                 fields=terc.fields,
@@ -426,12 +404,17 @@ class GenericLinkManager(object):
                 getattr(self.dict_link_managers, field + '_link_manager'
                         ).items()))[value]
 
+        if field == "integral":  # special case
+            new = simc()
+            integral = new.search
+            return integral
+
         unit_link_manager = terc()
 
         if field not in self.klass.link_fields or str(value) == 'nan':
             return ""
 
-        keywords = {'function': self.klass.fields[field].lower()}
+        keywords = {'function': self.klass.fields[field]}
         fields = list(self.klass.fields.keys())
         helper = self.klass.entry_helper
 
@@ -449,16 +432,13 @@ class GenericLinkManager(object):
 
         if field != fields[-1]:
             next_value = fields[fields.index(field) + 1]
-            keywords[next_value] = nafill
+            keywords[next_value] = 'nan'
 
-        cache = self.klass.cache[self.klass.system]
-        keywords["function"] = keywords.pop("function")
-
-        if tuple(keywords.items()) in cache:
-            return cache[tuple(keywords.items())]
+        if tuple(keywords.items()) in self.cache:
+            return self.cache[tuple(keywords.items())]
 
         result = Search(
-            database=unit_link_manager.database,
+            dataframe=unit_link_manager.database,
             system=unit_link_manager.system,
             search_mode='no_locname',
             fields=unit_link_manager.fields,
@@ -600,8 +580,7 @@ class SystemSentinel(object):
                 "than one TERYT row "
                 f"(got {len(row)} rows)"
             )
-
-        def check_field(field):
+        for field in fields:
             if fields[field] not in row:
                 raise UnpackError(
                     f"field "
@@ -610,9 +589,6 @@ class SystemSentinel(object):
                     f"{fields[field]!r}) "
                     f"not in source DataFrame"
                 )
-
-        with ThreadPoolExecutor() as e:
-            e.map(check_field, fields)
         klass.current_row = row
 
 
@@ -644,11 +620,6 @@ class System(ABC):
     by_prefix = (
         "date",  # TODO: this should be a datetime argument
     )
-    cache = {
-        "simc": {},
-        "terc": {},
-        "ulic": {},
-    }
     locname_keywords = (
         "name",
         "match",
@@ -753,12 +724,14 @@ class System(ABC):
         self.entry_helper = {}
 
         # Caching
-        self.store = self.cache[self.system].update
+        self.cache = {}
+        self.store = self.cache.update
 
         if link:
             self.link_manager = GenericLinkManager(
                 dict_link_managers=DictLinkManagers(self),
                 frame_link_managers=System.frame_link_managers,
+                cache=self.cache,
                 klass=self
             )
 
@@ -1003,7 +976,7 @@ class System(ABC):
         #       as search keywords. (09-02-2021)
         #
         self._candidate = Search(
-            database=self.database,
+            dataframe=self.database,
             system=self.system,
             search_mode=self.search_mode,
             fields=self.fields,
@@ -1088,24 +1061,6 @@ class System(ABC):
 
         return all([field in self.fields, field not in other_fields])
 
-    def _unpack_field(self, field, root_name):
-        code = self.current_row.iat[
-            0, self.current_row.columns.get_loc(root_name)
-        ]
-
-        if str(code) != 'nan':
-            self.entry_helper[field] = code
-            if self.link_manager.has_lm(field) and self.link_mode:
-                value = self.link_manager.link(field, code)
-                index = self.link_manager.link_indexes.get(
-                    field, None)
-                if index is not None:
-                    self.entry_helper[field] = UnitLink(
-                        code=code, value=value, index=index)
-                else:
-                    self.entry_helper[field] = SemanticLink(
-                        code=code, value=value)
-
     @set_sentinel(sentinel.unpack_row)
     def unpack_row(
             self,
@@ -1129,9 +1084,23 @@ class System(ABC):
         Entry
         """
         self.link_mode = (row, link)[True]
+        for field, colname in self.fields.items():
+            code = self.current_row.iat[
+                0, self.current_row.columns.get_loc(colname)
+            ]
 
-        for chunk in self.fields.items():
-            self._unpack_field(*chunk)
+            if str(code) != 'nan':
+                self.entry_helper[field] = code
+                if self.link_manager.has_lm(field) and self.link_mode:
+                    value = self.link_manager.link(field, code)
+                    index = self.link_manager.link_indexes.get(
+                        field, None)
+                    if index is not None:
+                        self.entry_helper[field] = UnitLink(
+                            code=code, value=value, index=index)
+                    else:
+                        self.entry_helper[field] = SemanticLink(
+                            code=code, value=value)
 
         self.entry_helper["terid"] = self.pack_terid(**self.entry_helper)
         self.unpacked = True
@@ -1352,17 +1321,13 @@ class EntryGroup(object):
             f"{', '.join(sorted(self.system.fields.keys()))}"
         )
         new_list = getattr(dataframe, self.system.fields[field]).tolist()
-
         if link and self.system.link_manager.has_lm(field):
-            def form(root_index):
+            for key_index in range(len(new_list)):
                 new = self.system.__class__()
                 entry = new.unpack_row(DataFrame([
-                    dataframe.loc[dataframe.index[root_index]]
+                    dataframe.loc[dataframe.index[key_index]]
                 ]))
-                new_list[root_index] = getattr(entry, field)
-
-            with ThreadPoolExecutor() as e:
-                e.map(form, range(len(new_list)))
+                new_list[key_index] = getattr(entry, field)
 
         return new_list
 
@@ -1429,6 +1394,7 @@ class Entry(object):
         if self.integral_id:
             with simc() as integral_manager:
                 integral = integral_manager.search(id=self.integral_id)
+                print(integral)
                 return LocalityLink(
                     code=integral.id,
                     value=integral.name,
