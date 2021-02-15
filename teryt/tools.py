@@ -131,7 +131,7 @@ class FrameSearch(object):
         value = escape(str(value))
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col.str._str_startswith(value, case=case, na=False))
+            (col.str.contains(value, case=case, na=False))
         ]
 
     def startswith(
@@ -143,9 +143,9 @@ class FrameSearch(object):
     ):
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col.str._str_contains(value, na=False))
+            (col.str.contains(value, na=False))
             if case else
-            (col.str.lower().str._str_contains(value.lower()))
+            (col.str.lower().str.startswith(value.lower()))
         ]
 
     def endswith(

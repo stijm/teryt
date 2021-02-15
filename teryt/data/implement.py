@@ -125,7 +125,7 @@ klass_name_dict = {
 def apply_namespace(
         namespace,
         klass,
-        key=(lambda x: not x._str_contains("__"))
+        key=(lambda x: not x.startswith("__"))
 ):
     """ Set filtered :namespace:'s attributes on a :klass:. """
     for attr in filter(key, dir(namespace)):
