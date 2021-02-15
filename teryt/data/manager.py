@@ -7,7 +7,7 @@
 import os
 import pandas
 from . import na_char
-from ..exceptions import MissingResourcesError as MRes
+from .. import exceptions
 
 directory = os.path.abspath(os.path.dirname(__file__))
 
@@ -29,15 +29,17 @@ def resource_file(system):
     files = os.listdir(path)
 
     if len(files) > 1:
-        raise MRes(f"resource file path is indistinct; leave only 1 file "
-                   f"in {path} to continue")
+        raise exceptions.ResourceError(f"resource file path "
+                                       f"is indistinct; leave "
+                                       f"only 1 file in {path} "
+                                       f"to continue")
     elif not files:
-        raise MRes(f"{system} resource not found in {path}")
+        raise exceptions.MissingResourcesError(f"{system} resource not found in {path}")
 
     file = os.path.join(path, files[0])
 
     if not file.endswith(".csv"):
-        raise MRes(f"only .csv is supported ({file})")
+        raise exceptions.ResourceError(f"only .csv is supported ({file})")
 
     return file
 

@@ -9,7 +9,11 @@ class Error(Exception):
     """ An error. """
 
 
-class MissingResourcesError(Error):
+class ResourceError(Exception):
+    """ A resource error. """
+
+
+class MissingResourcesError(ResourceError):
     """ Missing resources error. """
 
 

@@ -17,18 +17,18 @@
 import dataclasses
 import re
 import typing
-
 from abc import ABC
 from concurrent.futures import ThreadPoolExecutor
-
 from itertools import compress
 from math import factorial
 from typing import (
     final,
     Hashable,
     Union,
+    Type,
 )
 from warnings import warn
+
 from pandas import DataFrame, Series
 
 from .data import na_char
@@ -60,6 +60,8 @@ from .tools import (
 
 systems = StringCaseFoldTuple(('simc', 'terc', 'ulic'))
 transfer_collector = {}
+
+_sentinel = object()
 
 
 def transferred_searches(key):
@@ -109,8 +111,8 @@ class UnitLink(SemanticLink):
     @property
     def as_unit(self):
         if self.index or self.index == 0:
-            with terc() as unit_manager:
-                return unit_manager.index(self.index)
+            with terc() as unit_mgr:
+                return unit_mgr.index(self.index)
 
     as_entry = as_unit
 
@@ -123,8 +125,8 @@ class LocalityLink(SemanticLink):
     @property
     def as_loc(self):
         if self.index or self.index == 0:
-            with simc() as loc_manager:
-                return loc_manager.index(self.index)
+            with simc() as loc_mgr:
+                return loc_mgr.index(self.index)
 
     as_entry = as_loc
 
@@ -135,39 +137,39 @@ class Search(object):
     def __init__(
             self,
             *,
-            dataframe: DataFrame,
+            database: DataFrame,
             system: str,
-            search_mode: str,
+            method: str,
             fields: Union[dict, property],
             case: bool,
-            posmethod: typing.Iterable,
-            prefmethod: typing.Iterable,
-            name: str = '',
+            str_contains: typing.Iterable,
+            str_startswith: typing.Iterable,
+            str_eq='',
     ):
         """ Constructor. """
-        self.database = dataframe
+        self.database = database
         self.system = system
-        self.current = self.database.copy()
-        self.frames = [self.current]
-        self.search_mode = search_mode
+        self._cur = self.database.copy()
+        self._frames = [self._cur]
+        self.method = method
         self.fields = fields
         self.case = case
         self.search_keywords = {}
-        self.ineffective = ''
-        self.name = name
-        self.posmethod = posmethod
-        self.prefmethod = prefmethod
+        self._ineffective = ''
+        self._str_eq = str_eq
+        self._str_contains = str_contains
+        self._str_startswith = str_startswith
         self.attempts = 0
         self.max_attempts = 0
         self._done = False
 
     def _failure(self):
         """ Was anything found? """
-        return self.current.empty or self.current.equals(self.database)
+        return self._cur.empty or self._cur.equals(self.database)
 
     def _lookup(self):
         for field, query in (*self.search_keywords.items(),):
-            if field == 'voivodship':
+            if field == "voivodship":
                 query = query.upper()
             self.attempts += 1
             if field not in self.fields:
@@ -178,56 +180,55 @@ class Search(object):
                 value=str(query),
                 case=self.case
             )
-            method = 'name'
-            if field in self.posmethod:
-                method = 'contains'
-            elif field in self.prefmethod:
-                method = 'startswith'
+            method = "name"
+            if field in self._str_contains:
+                method = "contains"
+            elif field in self._str_startswith:
+                method = "startswith"
 
-            self.current = getattr(
-                FrameSearch(self.current),
+            self._cur = getattr(
+                FrameSearch(self._cur),
                 method
             )(**keyword_args)
 
-            if self._failure():
-                if self.current.equals(self.database):
+            if self._failure() and field != [*self.search_keywords][-1]:
+                if self._cur.equals(self.database):
                     no_uniqueness = f'It seems that all values in ' \
                                     f'{field!r} field ' \
                                     f'are equal to {query!r}. Try ' \
                                     f'using more unique key words.'
                     warn(no_uniqueness, category=UserWarning)
-                self.current = self.frames[-1]
+                self._cur = self._frames[-1]
                 if self.attempts <= self.max_attempts:
                     self.search_keywords[field] = self.search_keywords.pop(field)
                     self._lookup()
                 else:
                     self._done = True
                     break
-            self.frames.append(self.current)
+            self._frames.append(self._cur)
 
     def _name_lookup(self):
-        self.current = getattr(
-            FrameSearch(self.current),
-            self.search_mode
+        self._cur = getattr(
+            FrameSearch(self._cur),
+            self.method
         )(root=self.fields["name"],
-          value=self.name,
+          value=self._str_eq,
           case=self.case)
 
-        self.frames.append(self.current)
+        self._frames.append(self._cur)
 
     def search(self, search_keywords) -> "DataFrame":
-        # TODO: no shuffling by itself, it should be itertools.product.
         self.search_keywords = search_keywords
         self.max_attempts = factorial(len(self.search_keywords))
 
-        if self.search_mode != "NO_NAME":
+        if self.method != "NO_NAME":
             self._name_lookup()
             if self._failure():
                 return DataFrame()
 
         if not self._done:
             self._lookup()
-        return self.current
+        return self._cur
 
     def __call__(self, search_keywords: dict):
         return self.search(search_keywords=search_keywords)
@@ -235,72 +236,71 @@ class Search(object):
 
 class GenericLinkManagerBroker(object):
     def __init__(self):
-        self.linkable_args = {}
-        self.unlinkable_args = {}
+        self.largs = {}
+        self.uargs = {}
 
     @staticmethod
-    def link(klass, arguments, _keywords):
+    def link(gl_mgr, arguments, _keywords):
         if arguments:
             field = next(iter(arguments[:]))
             if field != 'integral':
                 require(
-                    klass.has_lm(field),
+                    gl_mgr.has_lm(field),
                     f'field {field!r} '
                     f'cannot be linked'
                 )
 
-    def link_names(self, klass, _args, keywords):
-        expected_kw = sorted(klass.klass.fields.keys())
-        # self.__init__()
+    def link_names(self, gl_mgr, _arguments, keywords):
+        expected_kw = sorted(gl_mgr.system.fields.keys())
 
         for keyword in list(set(keywords)):
             if keyword in expected_kw:
-                e = klass.erroneous_argument
-                TypeError(e % ('link_names', keyword, ', '.join(expected_kw)))
+                e = gl_mgr.erroneous_argument
+                TypeError(e % ("link_names", keyword, ', '.join(expected_kw)))
 
         for name, value in keywords.items():
-            if klass.has_frame_lm(name):
-                self.linkable_args.update({name: value})
+            if gl_mgr.has_frame_lm(name):
+                self.largs.update({name: value})
                 continue
-            elif klass.has_dict_lm(name):
-                link_manager = getattr(klass, name + '_link_manager')
-                if value.isnumeric() and value in link_manager.values():
+            elif gl_mgr.has_dict_lm(name):
+                link_mgr = getattr(gl_mgr, name + "_link_manager")
+                if value.isnumeric() and value in link_mgr.values():
                     value = dict.__call__(
-                        map(reversed, link_manager.items()))[value]
-                if value not in link_manager:
-                    e = f'{value!r} is not a valid ' \
-                        f'{name.replace("_", " ")!r} non-ID value'
+                        map(reversed, link_mgr.items()))[value]
+                if value not in link_mgr:
+                    e = f"{value!r} is not a valid " \
+                        f"{name.replace('_', ' ')!r} non-ID value"
                     raise ValueError(e)
                 else:
-                    value = link_manager[value]
-            self.unlinkable_args.update({name: value})
+                    value = link_mgr[value]
+            self.uargs.update({name: value})
 
 
 @dataclasses.dataclass(init=False)
 class GenericLinkManager(object):
-    klass: "System"
+    system: "System"
     dict_link_managers: "DictLinkManagers"
     frame_link_managers: "FrameLinkManagers"
 
     broker = GenericLinkManagerBroker()
 
-    def __init__(self, klass, dict_link_managers, frame_link_managers):
-        self.klass = klass
+    def __init__(self, system, dict_link_managers, frame_link_managers):
+        self.system = system
         self.dict_link_managers = dict_link_managers
         self.frame_link_managers = frame_link_managers
-        self.store = self.klass.cache[self.klass.system].update
+        self.store = self.system.cache[self.system.system].update
         self.link_indexes = {}
 
     @set_broker(broker.link_names)
     def link_names(self, **_keywords):
-        linkable = self.broker.linkable_args
-        unlinkable = self.broker.unlinkable_args
+        linkable = self.broker.largs
+        unlinkable = self.broker.uargs
         extract = unlinkable.copy()
         for field in unlinkable.keys():
-            if field not in self.klass.terc.columns:
+            if field not in self.system.terc.columns:
                 extract.pop(field)
 
-        fields = list(self.klass.fields.keys())
+        fields = list(self.system.fields.keys())
         for field, value in linkable.items():
             # TODO: implement a dict with all fields mappers
             if field == 'voivodship' and isinstance(value, str):
@@ -325,14 +325,14 @@ class GenericLinkManager(object):
                 unlinkable.update({field: value})
 
             entry = Search(
-                dataframe=frame_link_manager,
+                database=frame_link_manager,
                 system="terc",
-                search_mode="equal",
+                method="equal",
                 fields=terc.fields,
                 case=False,
-                posmethod=terc.posmethod,
-                prefmethod=terc.prefmethod,
-                name=value
+                str_contains=terc.posmethod,
+                str_startswith=terc.prefmethod,
+                str_eq=value
             )(search_keywords=unlinkable)
 
             if entry.empty:
@@ -341,9 +341,9 @@ class GenericLinkManager(object):
             print(index)
             self.link_indexes[field] = index
             link_result = {field: entry.iat[0, entry.columns.get_loc(
-                self.klass.fields[field]
+                self.system.fields[field]
             )]}
-            self.klass.entry_helper.update(link_result)
+            self.system.entry_helper.update(link_result)
             unlinkable.update(link_result)
 
             if field != fields[0]:
@@ -351,7 +351,7 @@ class GenericLinkManager(object):
                 for rot in range(quantum + 1):
                     prev = fields[quantum - rot]
                     unlinkable[prev] = entry.iat[
-                        0, entry.columns.get_loc(self.klass.fields[prev])
+                        0, entry.columns.get_loc(self.system.fields[prev])
                     ]
 
         return dict(**extract, **unlinkable)
@@ -401,12 +401,12 @@ class GenericLinkManager(object):
 
         unit_link_manager = terc()
 
-        if field not in self.klass.link_fields or str(value) == na_char:
+        if field not in self.system.link_fields or str(value) == na_char:
             return ""
 
-        keywords = {'function': function_dict[self.klass.fields[field]]}
-        fields = list(self.klass.fields.keys())
-        helper = self.klass.entry_helper
+        keywords = {'function': function_dict[self.system.fields[field]]}
+        fields = list(self.system.fields.keys())
+        helper = self.system.entry_helper
 
         if field != fields[0]:
             quantum = fields.index(field) - 1
@@ -424,19 +424,19 @@ class GenericLinkManager(object):
             next_value = fields[fields.index(field) + 1]
             keywords[next_value] = na_char
 
-        cache = self.klass.cache[self.klass.system]
+        cache = self.system.cache[self.system.system]
 
         if tuple(keywords.items()) in cache:
             return cache[tuple(keywords.items())]
 
         result = Search(
-            dataframe=unit_link_manager.database,
+            database=unit_link_manager.database,
             system=unit_link_manager.system,
-            search_mode='NO_NAME',
+            method='NO_NAME',
             fields=unit_link_manager.fields,
             case=False,
-            posmethod=unit_link_manager.posmethod,
-            prefmethod=unit_link_manager.prefmethod,
+            str_contains=unit_link_manager.posmethod,
+            str_startswith=unit_link_manager.prefmethod,
         )(search_keywords=keywords)
 
         self.link_indexes[field] = result.iat[0, 0]
@@ -459,8 +459,8 @@ class GenericLinkManager(object):
 
 class SystemBroker(object):
     @staticmethod
-    def search(klass, arguments, keywords):
-        klass.__init__(**klass.modes)
+    def search(system, arguments, keywords):
+        system.__init__(**system.modes)
 
         if len(arguments) == 1:
             keyword = next(iter(arguments[:]))
@@ -486,11 +486,11 @@ class SystemBroker(object):
                 'no keyword arguments')
 
         search_keywords = tuple(
-            set(klass.locname_keywords + (*klass.fields.keys(),))
-        ) + klass.optional_str_arguments
+            set(system.locname_keywords + (*system.fields.keys(),))
+        ) + system.optional_str_arguments
 
         keywords = dict(map(  # roots -> fields
-            lambda kv: (klass.ensure_field(kv[0]), kv[1]),
+            lambda kv: (system.ensure_field(kv[0]), kv[1]),
             keywords.items())
         )
 
@@ -502,7 +502,7 @@ class SystemBroker(object):
                 f')'
             )
 
-        for conflicted in klass.conflicts:
+        for conflicted in system.conflicts:
             conflict = []
             conflicted = sorted(conflicted)
             for keyword in conflicted:
@@ -514,43 +514,43 @@ class SystemBroker(object):
                             (' and '.join(map('%s'.__mod__, conflicted))))
                     conflict.append(keyword)
 
-        klass.name_field, klass.force_unpack = None, False
-        modes = klass.locname_keywords + ('NO_NAME',)
-        klass.search_mode = modes[-1]
+        system.name_field, system.force_unpack = None, False
+        modes = system.locname_keywords + ('NO_NAME',)
+        system.method = modes[-1]
 
         for keyword in keywords.copy():
-            for mode in klass.locname_keywords:
+            for mode in system.locname_keywords:
                 if keyword == mode:
-                    klass.search_mode = mode
-                    klass.name_field = keywords[mode]
+                    system.method = mode
+                    system.name_field = keywords[mode]
                     del keywords[mode]
 
-        klass.raise_for_failure = keywords.pop("raise_for_failure",
-                                               klass.raise_for_failure)
-        klass.unpack_mode = keywords.pop("unpack", klass.unpack_mode)
-        klass.link_mode = keywords.pop("link", klass.link_mode)
-        klass.force_unpack = keywords.pop("force_unpack", klass.force_unpack)
-        klass.unpacked = keywords.pop("unpacked", False)
-        klass.case = keywords.pop("case", klass.case)
+        system.raise_for_failure = keywords.pop("raise_for_failure",
+                                                system.raise_for_failure)
+        system.unpack_mode = keywords.pop("unpack", system.unpack_mode)
+        system.link_mode = keywords.pop("link", system.link_mode)
+        system.force_unpack = keywords.pop("force_unpack", system.force_unpack)
+        system.unpacked = keywords.pop("unpacked", False)
+        system.case = keywords.pop("case", system.case)
         terid = keywords.pop("terid", '')
 
-        if not klass.unpacked:
-            klass.link_manager.erroneous_argument = klass.erroneous_argument
-            keywords = klass.link_manager.link_names(**keywords)
+        if not system.unpacked:
+            system.link_manager.erroneous_argument = system.erroneous_argument
+            keywords = system.link_manager.link_names(**keywords)
         if terid:
-            unpacked = klass.unpack_terid(terid)
+            unpacked = system.unpack_terid(terid)
             [keywords.__setitem__(n, v) for n, v in unpacked.items() if v]
 
-        klass.search_keywords = keywords
-        klass._current = klass.database[:]
+        system.search_keywords = keywords
+        system._current = system.database[:]
 
-        for field in klass.search_keywords:
-            root_name = klass.fields.get(field, None)
+        for field in system.search_keywords:
+            root_name = system.fields.get(field, None)
             # KeyError: 'secname' after using ULIC
             if not root_name:
                 continue
-            klass.database[root_name] = klass.database[
-                klass.fields[field]
+            system.database[root_name] = system.database[
+                system.fields[field]
             ].map(str)
 
     @staticmethod
@@ -558,11 +558,11 @@ class SystemBroker(object):
         if len(args) == 1:
             row = args[0]
         else:
-            row = keywords.pop("row", None)
+            row = keywords.pop("row", _sentinel)
         fields = klass.fields
         if isinstance(row, Series):
             row = DataFrame([[*row]], columns=row.keys())
-        if row is None:
+        if row is _sentinel:
             raise UnpackError("nothing to unpack from")
         if row.empty:
             raise UnpackError("nothing to unpack from")
@@ -581,7 +581,7 @@ class SystemBroker(object):
                     f"{fields[field]!r}) "
                     f"not in source DataFrame"
                 )
-        klass.current = row
+        klass._cur = row
 
 
 class DictLinkManagers(object):
@@ -728,7 +728,7 @@ class System(ABC):
             self.link_manager = GenericLinkManager(
                 dict_link_managers=DictLinkManagers(self),
                 frame_link_managers=System.frame_link_managers,
-                klass=self
+                system=self
             )
 
     def __enter__(self):
@@ -772,9 +772,9 @@ class System(ABC):
     def _dispatcher(self):
         current = self._current.reset_index()
         if self._failure():
-            err = error_types[self.system.lower()]
+            not_found_err = error_types[self.system]
             if self.raise_for_failure:
-                raise err('no results found')
+                raise not_found_err("no results found")
             self.__init__()
         else:
             self.found_results = True
@@ -789,7 +789,7 @@ class System(ABC):
         return self._current.empty or self._current.equals(self.database)
 
     @final
-    def ensure_field(self, name):
+    def ensure_field(self, name) -> str:
         """
         Find :name: in fields and return it if it occurs.
 
@@ -815,7 +815,7 @@ class System(ABC):
         """ Fields. """
         raise NotImplementedError
 
-    def index(self, i, /, *, link=True):
+    def index(self, i, /, *, link=True, inplace=True):
         """
         Return an entry by index.
 
@@ -827,13 +827,17 @@ class System(ABC):
         link : bool
             Whether to link the result entry.
 
+        inplace : bool
+            Whether to perform on the current instance or new.
+
         Returns
         -------
         Entry
         """
-        if (len(self.database) - 1) < i:
+        instance = (lambda: self.__class__(**self.modes), lambda: self)[inplace]()
+        if (len(instance.database) - 1) < i:
             raise ValueError(f"index too large (max: {len(self.database) - 1})")
-        return self.unpack_row(row=self.database.iloc[i], link=link)
+        return instance.unpack_row(row=self.database.iloc[i], link=link)
 
     get_entry = index
 
@@ -974,14 +978,14 @@ class System(ABC):
         #       as search keywords. (09-02-2021)
         #
         self._current = Search(
-            dataframe=self.database,
+            database=self.database,
             system=self.system,
-            search_mode=self.search_mode,
+            method=self.search_mode,
             fields=self.fields,
             case=self.case,
-            name=self.name_field,
-            posmethod=self.posmethod,
-            prefmethod=self.prefmethod
+            str_eq=self.name_field,
+            str_contains=self.posmethod,
+            str_startswith=self.prefmethod
         )(search_keywords=self.search_keywords)
 
         return self._dispatcher()
@@ -1060,14 +1064,15 @@ class System(ABC):
         return all([field in self.fields, field not in other_fields])
 
     def _treat_data_chunk(self, field, root):
-        code = self.current.iat[
+        code: str = self.current.iat[
             0, self.current.columns.get_loc(root)
         ]
 
-        if str(code) != na_char:
+        if code != na_char:
             self.entry_helper[field] = code
             if self.link_manager.has_lm(field) and self.link_mode:
                 value = self.link_manager.link(field, code)
+
                 index = self.link_manager.link_indexes.get(
                     field, None)
                 if index is not None:
@@ -1080,7 +1085,7 @@ class System(ABC):
     @set_broker(broker.unpack_row)
     def unpack_row(
             self,
-            row: Union["EntryGroup", "Series", "DataFrame"] = None,
+            row: Union["EntryGroup", "Series", "DataFrame"] = None,  # noqa
             *,
             link=True
     ) -> "Entry":
@@ -1099,7 +1104,7 @@ class System(ABC):
         -------
         Entry
         """
-        self.link_mode = (row, link)[True]
+        self.link_mode = link
         for chunk in self.fields.items():
             self._treat_data_chunk(*chunk)
         self.entry_helper["terid"] = self.pack_terid(**self.entry_helper)
@@ -1110,6 +1115,14 @@ class System(ABC):
             row=self.current,
             index=self.current.iat[0, 0]
         )
+
+    def multi_unpack(self,
+                     rows: Union["EntryGroup", "DataFrame"] = None,
+                     *,
+                     link=True
+                     ):
+        for row in rows.iterrows():
+            print(row)
 
     def unpack_terid(self, teritorial_id: str, errors: bool = True) -> "dict":
         """
@@ -1252,7 +1265,7 @@ class EntryGroup(object):
     todict = to_dict
 
     @set_broker(broker.to_keywords)
-    def to_keywords(self, transfer_target: Union[str, type]):
+    def to_keywords(self, transfer_target: Union[str, Type]):
         """
         Create and return keywords leading to current search results.
 
@@ -1337,7 +1350,7 @@ class EntryGroup(object):
     def transfer(
             self,
             key: Hashable,
-            target: Union[str, type],
+            target: Union[str, Type],
             _kwt=None,
             **other
     ) -> "System":
