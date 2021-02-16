@@ -4,10 +4,7 @@
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
-from pandas import (  # noqa: F401
-    Series,
-    DataFrame
-)
+from pandas import Series, DataFrame
 from typing import Any, Sequence, Union
 from re import escape
 from functools import wraps
@@ -31,15 +28,8 @@ def ensure_column(item, frame) -> Series:
     If :item: is not a :frame: column, create it and return it.
     Otherwise, return :item: as a :frame: column.
     """
-    # Equivalent to:
-    # ```
-    # if isinstance(item, Series):
-    #     return item
-    # return frame[str(item)]
-    # ```
-    return (lambda: frame[str(item)],  # False → index 0
-            lambda: item  # True → index 1
-            )[isinstance(item, Series)]()
+    return (lambda: frame[str(item)],
+            lambda: item)[isinstance(item, Series)]()
 
 
 def set_broker(priority) -> type(lambda: None):
@@ -93,6 +83,11 @@ class FrameSearch(object):
             DataFrame to search in.
         """
         self.frame = frame
+
+    def get_method(self, name, default=None):
+        if hasattr(self, name):
+            return object.__getattribute__(self, name)
+        return default
 
     def name(
             self,

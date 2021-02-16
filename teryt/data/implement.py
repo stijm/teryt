@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 
 COMMON = SimpleNamespace(
-    gmitype_link_manager={
+    gmitype_link_mgr={
         "miejska": "1",
         "gmina miejska": "1",
         "wiejska": "2",
@@ -45,13 +45,13 @@ SIMC = SimpleNamespace(
         "gmina": 2,
         "gmitype": 1
     },
-    cnowner_link_manager={
+    cnowner_link_mgr={
         True: '1',
         False: '0'
     },
 
     # This is WMRODZ, in a dict…
-    loctype_link_manager={
+    loctype_link_mgr={
         "miasto": '96',
         "delegatura": '98',
         "dzielnica m. st. Warszawy": '95',
@@ -114,7 +114,7 @@ function_dict = {
 }
 
 
-klass_name_dict = {
+namespaces = {
     "COMMON": COMMON,
     "SIMC": SIMC,
     "TERC": TERC,
@@ -122,7 +122,7 @@ klass_name_dict = {
 }
 
 
-def apply_namespace(
+def update_vars_from_namespace(
         namespace,
         klass,
         key=(lambda x: not x.startswith("__"))
@@ -138,8 +138,8 @@ def apply_namespace(
 
 def implement_common_data(register):
     """ Internal helper function for implementing data on Register class. """
-    namespace = klass_name_dict["COMMON"]
-    apply_namespace(namespace, register)
+    namespace = namespaces["COMMON"]
+    update_vars_from_namespace(namespace, register)
 
 
 def implement_specific_data(simc, terc, ulic):
@@ -149,5 +149,5 @@ def implement_specific_data(simc, terc, ulic):
     global SIMC, TERC, ULIC
 
     for klass in [simc, terc, ulic]:
-        namespace = klass_name_dict[klass.__name__]
-        apply_namespace(namespace, klass)
+        namespace = namespaces[klass.__name__]
+        update_vars_from_namespace(namespace, klass)
