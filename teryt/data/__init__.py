@@ -4,4 +4,4 @@
 # Author: Stim (stijm), 2021
 # License: GNU GPLv3
 
-na_char = '-'
+na_char = "-"

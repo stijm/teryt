@@ -319,12 +319,11 @@ class GenericLinkManager(object):
             if field == 'voivodship' and isinstance(value, str):
                 value = value.upper()
 
-            frame_link_mgr_name = field + "s"
-            frame_link_mgr: DataFrame = self.frame_link_mgrs.get(frame_link_mgr_name)
+            frame_link_mgr: DataFrame = self.frame_link_mgrs.get(field)
 
             if frame_link_mgr.empty:
                 warn(
-                    f"no link managers available for {frame_link_mgr_name}. "
+                    f"no link managers available for {field + 's'}. "
                     "Search keywords are now updated with the provided value, "
                     "however results are possible not to be found if it "
                     "is not a valid ID."
