@@ -37,11 +37,11 @@ def set_broker(priority) -> type(lambda: None):
     Precede the function to be decorated with another function,
     e.g. to check the arguments given to the function.
     """
-    def wrapper(protected):
-        @wraps(protected)
+    def wrapper(sauce):
+        @wraps(sauce)
         def priority_wrapper(self, *args, **kwargs):
             priority(self, args, kwargs)
-            return protected(self, *args, **kwargs)
+            return sauce(self, *args, **kwargs)
 
         return priority_wrapper
     return wrapper
