@@ -6,4 +6,4 @@
 
 ## Special thanks
 I would like to thank greatly [@Ostrzyciel](https://github.com/Ostrzyciel). If not he, this library would 
-not come into existence, neither would all my other Python projects.
+not come into existence, equally all my other Python projects.
