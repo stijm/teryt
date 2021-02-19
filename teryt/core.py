@@ -1791,10 +1791,10 @@ names = {
     "ulic": {*ULIC().to_list("name"), *ULIC().to_list("secname")},
 }
 
-# experimental… strongly experimental.
+# Experimental… strongly experimental.
 name_case_descriptors = {
     "voivodship": str.upper,
-    "powiat": str.casefold,  # meh
+    "powiat": str.casefold,  # facepalm
     "gmina": str.title,
 }
 
