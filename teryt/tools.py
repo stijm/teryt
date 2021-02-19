@@ -5,13 +5,9 @@
 # License: MIT
 
 from functools import wraps
-from pandas import (
-    DataFrame,
-    Series,
-
-)
+from pandas import DataFrame, Series  # noqa: F401
 from re import escape
-from typing import Any, Sequence, Union
+from typing import (Any, Sequence, Union)
 
 
 def require(logic, error, default=ValueError) -> Any:

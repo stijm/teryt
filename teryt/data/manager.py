@@ -34,7 +34,8 @@ def resource_file(system):
                                        f"only 1 file in {path} "
                                        f"to continue")
     elif not files:
-        raise exceptions.MissingResourcesError(f"{system} resource not found in {path}")
+        raise exceptions.MissingResourcesError(
+            f"{system} resource not found in {path}")
 
     file = os.path.join(path, files[0])
 

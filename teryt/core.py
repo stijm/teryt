@@ -6,18 +6,13 @@
 
 # Future features
 # ---------------
-# - *.xml resources support
 # - System.filter
-# - System.to_xml
-# - System.results.to_xml
 
 
 from abc import ABC
-from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from itertools import compress
-from more_itertools import take
+from itertools import compress, islice
 from pandas import DataFrame, Series
 from re import escape
 from simstring.feature_extractor.character_ngram import (
@@ -85,16 +80,14 @@ class SMLink(object):
     value: Any
 
     def __getitem__(self, item: (str, int)):
-        return (
-            {item: getattr(self, item, '')},
-            [*dict(self).values()]
-        )[isinstance(item, int)][item]
+        return ({item: getattr(self, item, '')}, [*dict(self).values()]
+                )[isinstance(item, int)][item]
 
     def __str__(self):
-        return str(self.code or '')
+        return self.code or ''
 
     def __add__(self, other):
-        return str(self).__add__(other)
+        return self.code.__add__(other)
 
     def __bool__(self):
         return all([self.value, self.code])
@@ -257,28 +250,31 @@ class GenericLinkManagerBroker(object):
                 )
 
     def link_names(self, gl_mgr, _arguments, keywords):
-        expected_kw = sorted(gl_mgr.system.fields.keys())
+        expected = sorted(gl_mgr.system.fields.keys())
 
         for keyword in list(set(keywords)):
-            if keyword in expected_kw:
+            if keyword in expected:
                 e = gl_mgr.erroneous_argument
-                TypeError(e % ("link_names", keyword, ', '.join(expected_kw)))
+                TypeError(e % ("link_names", keyword, ', '.join(expected)))
 
         for name, value in keywords.items():
             if gl_mgr.has_frame_link_mgr(name):
                 self.frame_linked_args.update({name: value})
                 continue
             elif gl_mgr.has_dict_link_mgr(name):
-                link_mgr = gl_mgr.get(name)
-                if value.isnumeric() and value in link_mgr.values():
-                    value = dict.__call__(
-                        map(reversed, link_mgr.items()))[value]
-                if value not in link_mgr:
-                    e = f"{value!r} is not a valid " \
-                        f"{name.replace('_', ' ')!r} non-ID value"
-                    raise ValueError(e)
-                else:
-                    value = link_mgr[value]
+                link_mgr = gl_mgr.get(name, _sentinel)
+                if link_mgr is not _sentinel:
+                    if value.isnumeric() and value in link_mgr.values():
+                        value = dict.__call__(
+                            map(reversed, link_mgr.items()))[value]
+                    if value not in link_mgr:
+                        e = (f"{value!r} is not a valid "
+                             f"{name.replace('_', ' ')!r} non-ID value. "
+                             )
+
+                        raise ValueError(e)
+                    else:
+                        value = link_mgr[value]
             self.other_args.update({name: value})
 
 
@@ -341,7 +337,18 @@ class GenericLinkManager(object):
             )(keywords=other_args)
 
             if entry.empty:
-                raise ErroneousUnitName(f"{value!r} is not a {field}")
+                case_fmter = name_case_descriptors[field]
+                fmt = case_fmter(value)  # noqa
+                err = f"{fmt!r} is not a {field}"
+                ms = terc().most_similar(
+                    value, inplace=False).lstrip(
+                    "(").rstrip(")").split("|")
+                if ms != value:
+                    if ms[0] in self.frame_link_mgrs.get(
+                            field)[self.system.fields["name"]]:
+                        err += f". Did you mean " \
+                               f"{case_fmter(ms[0])!r}?"  # noqa
+                raise ErroneousUnitName(err)
             entry_index = entry.iat[0, 0]
             self.indexes[field] = entry_index
             link_result = {field: entry.iat[0, entry.columns.get_loc(
@@ -389,7 +396,8 @@ class GenericLinkManager(object):
         str
         """
         if self.has_dict_link_mgr(field):
-            return dict.__call__(map(reversed, self.dict_link_mgrs.get(field).items()))[value]
+            return dict.__call__(
+                map(reversed, self.dict_link_mgrs.get(field).items()))[value]
 
         if field == "integral":  # special case
             new = simc()
@@ -535,7 +543,8 @@ class SystemBroker(object):
             for mode in self.name_fields:
                 if keyword == mode:
                     self.method = mode
-                    self.name_word = self.most_similar(keywords[mode])
+                    self.name_word = (keywords[mode] if self.exact else
+                                      self.most_similar(keywords[mode]))
                     del keywords[mode]
 
         pop = keywords.pop
@@ -691,6 +700,7 @@ class System(ABC):
     def __init__(
             self,
             case=False,
+            exact=False,
             link=True,
             unpack=True,
             raise_for_failure=False,
@@ -700,24 +710,36 @@ class System(ABC):
 
         Parameters
         ----------
+        case : bool
+            Whether searched values are case-sensitive.
+
+        exact : bool
+            Whether to look for most similar names if a given name
+            is not correct.
+
         link : bool
             Whether to link the values in
             search/(converting to list)/(converting to dict).
 
         unpack : bool
             Whether to unpack future results/processed rows.
+
+        raise_for_failure : bool
+            Whether to raise *NotFound error if no results are found.
         """
         self.__class__.conflicts += tuple(
             map(lambda ls: ('terid', ls), self.link_fields))
 
         # Modes
         self.case = case
+        self.exact = exact
         self.force_unpack = False
         self.link_mode = link
         self.raise_for_failure = raise_for_failure
         self.unpack_mode = unpack
         self.modes = dict(
             case=self.case,
+            exact=self.exact,
             link=self.link_mode,
             raise_for_failure=self.raise_for_failure,
             unpack=self.unpack_mode
@@ -737,7 +759,7 @@ class System(ABC):
         self.database = self.database.reset_index()
 
         # Root names
-        self.root_names = self.roots = [*self.database.columns]
+        self.root_names = [*self.database.columns]
 
         # Searching
         self.name_word = None
@@ -773,8 +795,10 @@ class System(ABC):
             raise
 
     def __getitem__(self, item):
-        rows = self.database.iloc[item]
-        return self.multi_unpack(rows)
+        if isinstance(item, int):
+            return self.multi_unpack(
+                self.database.iloc[item], link=self.link_mode)
+        return self.to_list(item, link=self.link_mode)
 
     def __iter__(self):
         if self.entry_helper["terid"]:
@@ -839,18 +863,18 @@ class System(ABC):
         -------
         str
         """
-        fields = self.fields
-        if name in fields:
+        if name in self.fields:
             return name
-        root_name_upper = name.upper()  # root names are upper
-        return dict([*map(reversed, fields.items())]).get(
-            root_name_upper, name
-        )
+        return self.roots.get(name.upper(), name)
 
     @property
     def fields(self):
         """ Fields. """
         raise NotImplementedError
+
+    @property
+    def roots(self):
+        return dict([*map(reversed, self.fields.items())])
 
     def index(self, i, /, *, link=True):
         """
@@ -858,8 +882,8 @@ class System(ABC):
 
         Parameters
         ----------
-        i : int
-            Positional argument. Index of an entry.
+        i : int or slice
+            Positional argument. Slice of an entry.
 
         link : bool
             Whether to link the result entry.
@@ -868,8 +892,6 @@ class System(ABC):
         -------
         Entry
         """
-        if (len(self.database) - 1) < i:
-            raise ValueError(f"index too large (max: {len(self.database) - 1})")
         self.buffer = self.database.iloc[i]
         return self.unpack_row(row=self.buffer, link=link)
 
@@ -896,13 +918,15 @@ class System(ABC):
         """ Fields to be linked. """
         raise NotImplementedError
 
-    def most_similar(self, name):
+    def most_similar(self, name, inplace=True):
         if name not in names[self.system]:
             rank = self._name_searcher.ranked_search(name, 0.4)
             if not rank:
                 return name
-            pattern = "(" + "|".join(take(3, map(lambda res: res[1], rank))) + ")"
-            self.method = "match"
+            pattern = ("(" + "|".join(
+                islice(map(lambda res: res[1], rank), 3)) + ")")
+            if inplace:
+                self.method = "match"
             return pattern
         return name
 
@@ -1190,12 +1214,12 @@ class System(ABC):
             return self.__class__().unpack_row(pair[1], link=link)
 
         with ThreadPoolExecutor() as _multi:
-            r = list(_multi.map(_no_index_unpack, rows.iterrows()))
+            results = list(_multi.map(_no_index_unpack, rows.iterrows()))
 
-        if len(r) == 1 and not ensure_list:
-            return r[0]
+        if len(results) == 1 and not ensure_list:
+            return results[0]
 
-        return r
+        return results
 
     def unpack_terid(self, teritorial_id: str, errors: bool = True) -> "dict":
         """
@@ -1255,7 +1279,7 @@ implement_common_data(System)
 
 class EntryGroupBroker(object):
     @staticmethod
-    def to_keywords(klass, arguments, _kwds):
+    def to_keywords(self, arguments, _kwds):
         require(arguments, "to_keywords(): no arguments")
         target_name = arguments[0]
         if target_name in list(map(eval, systems)):
@@ -1264,7 +1288,7 @@ class EntryGroupBroker(object):
             raise ValueError(
                 f"cannot evaluate transfer target using name {target_name!r}")
 
-        klass.transfer_target = eval(target_name)()
+        self.transfer_target = evaldict[target_name]()
 
 
 class EntryGroup(object):
@@ -1290,7 +1314,9 @@ class EntryGroup(object):
         return repr(self.frame)
 
     def __getitem__(self, item):
-        return self.get_entries(item)
+        if isinstance(item, int):
+            return self.get_entries(item, link=self.system.link_mode)
+        return self.to_list(item, link=self.system.link_mode)
 
     def get_entries(self, number, link=True, ensure_list=False):
         frame_or_series = self.frame.iloc[number]
@@ -1341,20 +1367,20 @@ class EntryGroup(object):
     todict = to_dict
 
     @set_broker(broker.to_keywords)
-    def to_keywords(self, transfer_target: Union[str, Type]):
+    def to_keywords(self, goal: Union[str, Type]):
         """
         Create and return keywords leading to current search results.
 
         Parameters
         ----------
-        transfer_target: str or type
+        goal: str or type
             Target class (SIMC, TERC or ULIC).
 
         Returns
         -------
         generator
         """
-        transfer_target = (transfer_target, self.transfer_target)[True]
+        goal = (not goal, self.transfer_target)[True]
         name = {}
         if self.system.name_word:
             name = dict(match=escape(self.system.name_word))
@@ -1363,15 +1389,12 @@ class EntryGroup(object):
             **self.system.keywords,
             **self.system.modes
         )
-        yield transfer_target
+        yield goal
 
     # noinspection PyUnresolvedReferences
     def _form_root(self, root_index):
-        n = self.system.__class__()
-        entry = n.unpack_row(DataFrame([
-            self.frame.loc[self.frame.index[root_index]]
-        ]))
-
+        entry = self.system.__class__().unpack_row(
+            DataFrame([self.frame.loc[self.frame.index[root_index]]]))
         self.__class__._form_root.new_list[root_index] = getattr(
             entry, self.__class__._form_root.field)
 
@@ -1447,10 +1470,6 @@ class EntryGroup(object):
         return transfer_collector[key][-1]
 
 
-class EntryBroker(object):
-    to_keywords = EntryGroupBroker.to_keywords
-
-
 @dataclass(frozen=True)
 class Entry(object):
     """
@@ -1475,7 +1494,7 @@ class Entry(object):
     date: str = None
     index: int = None
 
-    broker = EntryBroker()
+    broker = EntryGroupBroker()  # inherit broker from EGB
 
     @property
     def is_entry(self):
@@ -1554,9 +1573,8 @@ class Entry(object):
             except AttributeError:
                 raise a from a
 
-    def __repr__(self, indent=0):
+    def __repr__(self, indent=4):
         conjunc = "\n" + " " * indent if indent > 0 else ""
-        # TODO: compress it maybe?
 
         # F"{value=}" rule was ommitted in order to avoid
         # SyntaxError in older versions.
@@ -1660,15 +1678,6 @@ class ULIC(System, ABC):
     """ ULIC system. """
 
 
-def _cachable_keywords(fields, keywords):
-    CachableKeywords = namedtuple(
-        "CachableKeywords",
-        sorted(fields),
-        defaults=[None] * len(fields),
-    )
-    return CachableKeywords.__new__(**keywords)
-
-
 implement_specific_data(SIMC, TERC, ULIC)
 disinherit(parent=ABC, klasses=[SIMC, TERC, ULIC])  # not abstract classes
 
@@ -1686,7 +1695,7 @@ def _make_recent(sys,
         if most_recent is None:
             raise err
     elif isinstance(sys, str) and sys in systems:
-        most_recent = eval(sys)()
+        most_recent = evaldict[sys]()
     elif isinstance(sys, type):
         if not issubclass(sys, System):
             raise err
@@ -1726,7 +1735,7 @@ def transfer(results, to_system=None, **keywords):
                         "System instance or name, not type")
     keywords = {'target': results.database, **keywords}
     recent = _make_recent(results.database)
-    return recent.transfer(to_system, **keywords)
+    return recent.results.transfer(to_system, **keywords)
 
 
 def to_list(system=None, from_results=True, **params):
@@ -1780,6 +1789,13 @@ names = {
     "terc": {*TERC().to_list("name")},
     "simc": {*SIMC().to_list("name")},
     "ulic": {*ULIC().to_list("name"), *ULIC().to_list("secname")},
+}
+
+# experimental… strongly experimental.
+name_case_descriptors = {
+    "voivodship": str.upper,
+    "powiat": str.casefold,  # meh
+    "gmina": str.title,
 }
 
 # Name searchers
