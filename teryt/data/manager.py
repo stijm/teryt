@@ -2,7 +2,7 @@
 
 # This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
-# License: GNU GPLv3
+# License: MIT
 
 import os
 import pandas

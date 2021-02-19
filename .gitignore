@@ -133,3 +133,4 @@ dmypy.json
 
 # Testing
 test.py
+*.lwp

@@ -4,7 +4,7 @@
 
 # This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
-# License: GNU GPLv3
+# License: MIT
 
 from .data.manager import resource_file
 from .data import implement

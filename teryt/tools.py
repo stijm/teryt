@@ -2,12 +2,16 @@
 
 # This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
-# License: GNU GPLv3
+# License: MIT
 
-from pandas import Series, DataFrame
-from typing import Any, Sequence, Union
-from re import escape
 from functools import wraps
+from pandas import (
+    DataFrame,
+    Series,
+
+)
+from re import escape
+from typing import Any, Sequence, Union
 
 
 def require(logic, error, default=ValueError) -> Any:
@@ -41,7 +45,8 @@ def set_broker(priority) -> type(lambda: None):
         @wraps(sauce)
         def priority_wrapper(self, *args, **kwargs):
             priority(self, args, kwargs)
-            return sauce(self, *args, **kwargs)
+            taste = sauce(self, *args, **kwargs)
+            return taste
 
         return priority_wrapper
     return wrapper
@@ -67,10 +72,9 @@ class StringCaseFoldTuple(tuple):
         return item.casefold() in self.casefold()
 
 
-class FrameSearch(object):
+class StrSearch(object):
     """
-    Search broker for more understandable
-    DataFrame searching.
+    String DataFrame search broker, more understandable.
     """
 
     def __init__(self, frame):
@@ -83,6 +87,8 @@ class FrameSearch(object):
             DataFrame to search in.
         """
         self.frame = frame
+
+    # TODO: DRY and speed-up
 
     def get_method(self, name, default=None):
         if hasattr(self, name):
@@ -98,9 +104,11 @@ class FrameSearch(object):
     ):
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col == value) if case or not isinstance(value, str)
-            else (col.str.lower() == value.lower())
-        ]
+                    (col == value)
+                    if case or not isinstance(value, str)
+                    else
+                    (col.str.lower() == value.lower())
+                    ]
 
     equal = name
 
@@ -113,8 +121,8 @@ class FrameSearch(object):
     ):
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col.str.match(value, case=case))
-        ]
+                    (col.str.match(value, case=case))
+                    ]
 
     def contains(
             self,
@@ -126,8 +134,8 @@ class FrameSearch(object):
         value = escape(str(value))
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col.str.contains(value, case=case, na=False))
-        ]
+                   (col.str.contains(value, case=case, na=False))
+                   ]
 
     def startswith(
             self,
@@ -138,10 +146,10 @@ class FrameSearch(object):
     ):
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col.str.contains(value, na=False))
-            if case else
-            (col.str.lower().str.startswith(value.lower()))
-        ]
+                (col.str.contains(value, na=False))
+                if case else
+                (col.str.lower().str.startswith(value.lower()))
+                ]
 
     def endswith(
             self,
@@ -152,10 +160,10 @@ class FrameSearch(object):
     ):
         col = ensure_column(root, self.frame)
         return self.frame.loc[
-            (col.str.endswith(value, na=False))
-            if case else
-            (col.str.lower().str.endswith(value.lower(), na=False))
-        ]
+                  (col.str.endswith(value, na=False))
+                  if case else
+                  (col.str.lower().str.endswith(value.lower(), na=False))
+                  ]
 
 
 class DisinheritanceError(KeyError):

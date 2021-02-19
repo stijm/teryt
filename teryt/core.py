@@ -2,7 +2,7 @@
 
 # This is the part of *teryt* library.
 # Author: Stim (stijm), 2021
-# License: GNU GPLv3
+# License: MIT
 
 # Future features
 # ---------------
@@ -11,21 +11,15 @@
 # - System.to_xml
 # - System.results.to_xml
 
-# TODO:
-#  - rewrite the searching algorithm,
-#  - improve caching,
-#  - add teritorial division unit hierarchy and put it in a tree,
-#    just find a way to improve the performance.
-
-import re
 
 from abc import ABC
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import compress
-from math import factorial
+from more_itertools import take
 from pandas import DataFrame, Series
+from re import escape
 from simstring.feature_extractor.character_ngram import (
     CharacterNgramFeatureExtractor)
 from simstring.measure.cosine import CosineMeasure
@@ -66,7 +60,7 @@ from .tools import (
     require,
     set_broker,
     StringCaseFoldTuple,
-    FrameSearch
+    StrSearch
 )
 
 systems = StringCaseFoldTuple(('simc', 'terc', 'ulic'))
@@ -107,11 +101,11 @@ class SMLink(object):
 
     def __iter__(self):
         if self.value:
-            yield 'value', self.value
-        yield 'code', self.code
-        i = getattr(self, 'index', None)
-        if i:
-            yield 'index', i
+            yield "value", self.value
+        yield "code", self.code
+        maybe_index = getattr(self, "index", _sentinel)
+        if maybe_index is not _sentinel:
+            yield "index", maybe_index
 
 
 @dataclass(frozen=True)
@@ -195,7 +189,7 @@ class Search(object):
             elif field in self._str_startswith:
                 method = "startswith"
 
-            self._buffer = FrameSearch(self._buffer).get_method(
+            self._buffer = StrSearch(self._buffer).get_method(
                 method)(**keyword_args)
 
             if self._failure():
@@ -221,7 +215,7 @@ class Search(object):
             self._frames.append(self._buffer)
 
     def _name_lookup(self):
-        self._buffer = FrameSearch(self._buffer).get_method(self.method)(
+        self._buffer = StrSearch(self._buffer).get_method(self.method)(
             root=self.fields["name"],
             value=self._str_eq,
             case=self._case)
@@ -231,7 +225,7 @@ class Search(object):
 
     def _search(self, keywords) -> "DataFrame":
         self._keywords = keywords
-        self._max_attempts = factorial(len(self._keywords))
+        self._max_attempts = len(self._keywords)
 
         if self.method != "no_name":
             self._name_lookup()
@@ -481,7 +475,7 @@ class GenericLinkManager(object):
 
 class SystemBroker(object):
     @staticmethod
-    def search(self, arguments, keywords):
+    def search(self: "System", arguments, keywords):
         self.__init__(**self.modes)
 
         if len(arguments) == 1:
@@ -532,7 +526,7 @@ class SystemBroker(object):
                             (' and '.join(map('%s'.__mod__, conflicted))))
                     conflict.append(keyword)
 
-        self.name_field = None
+        self.name_word = None
         self.force_unpack = False
         modes = self.name_fields + ('no_name',)
         self.method = modes[-1]
@@ -541,7 +535,7 @@ class SystemBroker(object):
             for mode in self.name_fields:
                 if keyword == mode:
                     self.method = mode
-                    self.name_field = keywords[mode]
+                    self.name_word = self.most_similar(keywords[mode])
                     del keywords[mode]
 
         pop = keywords.pop
@@ -746,7 +740,7 @@ class System(ABC):
         self.root_names = self.roots = [*self.database.columns]
 
         # Searching
-        self.name_field = None
+        self.name_word = None
         self.method = None
         self.keywords = {}
         self.found_results = False
@@ -902,6 +896,16 @@ class System(ABC):
         """ Fields to be linked. """
         raise NotImplementedError
 
+    def most_similar(self, name):
+        if name not in names[self.system]:
+            rank = self._name_searcher.ranked_search(name, 0.4)
+            if not rank:
+                return name
+            pattern = "(" + "|".join(take(3, map(lambda res: res[1], rank))) + ")"
+            self.method = "match"
+            return pattern
+        return name
+
     def pack_terid(self, **info) -> "str":
         """
         Pack information into teritorial ID.
@@ -1023,7 +1027,7 @@ class System(ABC):
             method=self.method,
             fields=self.fields,
             case=self.case,
-            str_eq=self.name_field,
+            str_eq=self.name_word,
             str_contains=self.posmethod,
             str_startswith=self.prefmethod
         )(keywords=self.keywords)
@@ -1353,7 +1357,7 @@ class EntryGroup(object):
         transfer_target = (transfer_target, self.transfer_target)[True]
         name = {}
         if self.system.name_word:
-            name = dict(match=re.escape(self.system.name_word))
+            name = dict(match=escape(self.system.name_word))
         yield dict(
             **name,
             **self.system.keywords,
@@ -1462,7 +1466,7 @@ class Entry(object):
     loctype: str = None
     streettype: str = None
     cnowner: str = None
-    __name_set: str = None
+    name: str = None
     secname: str = None
     function: str = None
     id: str = None
@@ -1512,7 +1516,7 @@ class Entry(object):
         """
         transfer_target = (transfer_target, self.transfer_target)[True]
         properties = dict(self.system)
-        name_field_value = properties.pop('name')
+        name_word = properties.pop('name')
         copy = properties.copy()
         for k, v in copy.items():
             if k in transfer_target.fields and str(v):
@@ -1522,7 +1526,7 @@ class Entry(object):
         keywords = {
             **properties,
             'unpacked': True,
-            'name': name_field_value,
+            'name': name_word,
             'raise_for_failure': self.raise_for_failure,
             'case': self.case
         }
@@ -1550,37 +1554,39 @@ class Entry(object):
             except AttributeError:
                 raise a from a
 
-    def __repr__(self, indent=True):
-        joiner = '\n    ' if indent else ''
+    def __repr__(self, indent=0):
+        conjunc = "\n" + " " * indent if indent > 0 else ""
         # TODO: compress it maybe?
 
         # F"{value=}" rule was ommitted in order to avoid
         # SyntaxError in older versions.
-        return (f"{self.type}({joiner if indent else ''}" +
-                (f"name={self.name!r}, {joiner}" if self.name else "") +
-                (f"secname={self.secname!r}, {joiner}"
+        return (f"{self.type}({conjunc if indent else ''}" +
+                (f"name={self.name!r}, {conjunc}" if self.name else "") +
+                (f"secname={self.secname!r}, {conjunc}"
                  if self.secname else "") +
-                f"terid={self.terid!r}, {joiner}"
-                f"system={self.system.system.upper()}, {joiner}"
-                f"voivodship={self.voivodship!r}, {joiner}" +
-                (f"powiat={self.powiat!r}, {joiner}" if self.powiat else "") +
-                (f"gmina={self.gmina!r}, {joiner}" if self.gmina else "") +
-                (f"gmitype={self.gmitype!r}, {joiner}"
+                f"terid={self.terid!r}, {conjunc}"
+                f"system={self.system.system.upper()}, {conjunc}"
+                f"voivodship={self.voivodship!r}, {conjunc}" +
+                (f"powiat={self.powiat!r}, {conjunc}" if self.powiat else "") +
+                (f"gmina={self.gmina!r}, {conjunc}" if self.gmina else "") +
+                (f"gmitype={self.gmitype!r}, {conjunc}"
                  if self.gmitype else "") +
-                (f"loctype={self.loctype!r}, {joiner}"
+                (f"loctype={self.loctype!r}, {conjunc}"
                  if self.loctype else "") +
-                (f"streettype={self.streettype!r}, {joiner}"
+                (f"streettype={self.streettype!r}, {conjunc}"
                  if self.streettype else "") +
-                (f"cnowner={self.cnowner!r}, {joiner}"
+                (f"cnowner={self.cnowner!r}, {conjunc}"
                  if self.cnowner else "") +
-                (f"function={self.function!r}, {joiner}"
+                (f"function={self.function!r}, {conjunc}"
                  if self.function else "") +
-                (f"id={self.id!r}, {joiner}" if self.id else "") +
-                (f"integral_id={self.integral_id!r}, {joiner}" if
+                (f"id={self.id!r}, {conjunc}" if self.id else "") +
+                (f"integral_id={self.integral_id!r}, {conjunc}" if
                  self.integral_id else "") +
-                f"date={self.date!r}, {joiner}"
+                f"date={self.date!r}, {conjunc}"
                 f"index={self.index}" + ('\n' if indent else '') +
                 ")")
+
+    repr = __repr__
 
 
 class Unit(Entry):
@@ -1762,18 +1768,24 @@ terc = Terc = TERC
 simc = Simc = SIMC
 ulic = Ulic = ULIC
 
-names = {
-    terc: set(TERC().to_list("name")),
-    simc: set(SIMC().to_list("name")),
-    ulic: set(*ULIC().to_list("name"), *ULIC().to_list("secname")),
-}
-
-# Setup
 System.frame_link_mgrs = FrameLinkManagers()
 
+evaldict = {
+    "terc": terc,
+    "simc": simc,
+    "ulic": ulic
+}
+
+names = {
+    "terc": {*TERC().to_list("name")},
+    "simc": {*SIMC().to_list("name")},
+    "ulic": {*ULIC().to_list("name"), *ULIC().to_list("secname")},
+}
+
+# Name searchers
 for __type, __name_set in names.items():
-    __system = __type()
+    __system = evaldict[__type]()
     __db = DictDatabase(CharacterNgramFeatureExtractor())
     for __string in __name_set:
         __db.add(__string)
-    __type._name_searcher = Searcher(__db, CosineMeasure())
+    __system.__class__._name_searcher = Searcher(__db, CosineMeasure())
