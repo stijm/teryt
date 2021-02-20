@@ -536,6 +536,7 @@ class SystemBroker(object):
 
         self.name_word = None
         self.force_unpack = False
+        self.exact = keywords.pop("exact", self.exact)
         modes = self.name_fields + ('no_name',)
         self.method = modes[-1]
 
