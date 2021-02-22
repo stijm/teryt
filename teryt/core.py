@@ -508,7 +508,7 @@ class SystemBroker(object):
         self.__init__(**self.modes)
 
         if len(arguments) == 1:
-            keyword = next(iter(arguments[:]))
+            keyword = arguments[0]
 
             if not isinstance(keyword, str):
                 raise TypeError(
