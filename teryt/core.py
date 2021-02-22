@@ -1373,7 +1373,7 @@ class EntryGroup(object):
         return repr(self.frame)
 
     def __getitem__(self, item):
-        if isinstance(item, int):
+        if isinstance(item, (int, slice)):
             return self.get_entries(item, link=self.system.link_mode)
 
         return self.to_list(item, link=self.system.link_mode)
@@ -1867,9 +1867,9 @@ terc = Terc = TERC
 simc = Simc = SIMC
 ulic = Ulic = ULIC
 
-__terc = TERC()
-__simc = SIMC()
-__ulic = ULIC()
+__terc = TERC(link=False)
+__simc = SIMC(link=False)
+__ulic = ULIC(link=False)
 
 System.frame_link_mgrs = FrameLinkManagers()
 
