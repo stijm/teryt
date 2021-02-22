@@ -358,7 +358,7 @@ class GenericLinkManager(object):
 
                 if most_similar != value:
                     this_field_names = self.frame_link_mgrs.get(
-                            field)[self.system.fields["name"]]
+                        field)[self.system.fields["name"]]
 
                     if most_similar[0] in this_field_names:
                         error += f". Did you mean " \
@@ -555,7 +555,7 @@ class SystemBroker(object):
                             (' and '.join(map('%s'.__mod__, conflicted))))
                     conflict.append(keyword)
 
-        self.name_word = None
+        self.str_eq = None
         self.force_unpack = False
         self.exact = keywords.pop("exact", self.exact)
         modes = self.name_fields + ('no_name',)
@@ -565,8 +565,8 @@ class SystemBroker(object):
             for mode in self.name_fields:
                 if keyword == mode:
                     self.method = mode
-                    self.name_word = (keywords[mode] if self.exact else
-                                      self.most_similar(keywords[mode]))
+                    self.str_eq = (keywords[mode] if self.exact else
+                                   self.most_similar(keywords[mode]))
                     del keywords[mode]
 
         pop = keywords.pop
@@ -795,7 +795,7 @@ class System(ABC):
         self.root_names = [*self.database.columns]
 
         # Searching
-        self.name_word = None
+        self.str_eq = None
         self.method = None
         self.keywords = {}
         self.found_results = False
@@ -1094,7 +1094,7 @@ class System(ABC):
             method=self.method,
             fields=self.fields,
             case=self.case,
-            str_eq=self.name_word,
+            str_eq=self.str_eq,
             str_contains=self.str_contains,
             str_startswith=self.str_startswith
         )(keywords=self.keywords)
@@ -1444,8 +1444,8 @@ class EntryGroup(object):
         """
         target = self.transfer_target
         name = {}
-        if self.system.name_word:
-            name = dict(match=escape(self.system.name_word))
+        if self.system.str_eq:
+            name = dict(match=escape(self.system.str_eq))
 
         yield dict(
             **name,
@@ -1608,7 +1608,7 @@ class Entry(object):
         """
         transfer_target = (transfer_target, self.transfer_target)[True]
         properties = dict(self.system)
-        name_word = properties.pop('name')
+        str_eq = properties.pop('name')
         copy = properties.copy()
 
         for k, v in copy.items():
@@ -1620,7 +1620,7 @@ class Entry(object):
         keywords = {
             **properties,
             'unpacked': True,
-            'name': name_word,
+            'name': str_eq,
             'raise_for_failure': self.raise_for_failure,
             'case': self.case
         }
@@ -1891,7 +1891,6 @@ name_case_descriptors = {
     "powiat": str.casefold,  # facepalm
     "gmina": str.title,
 }
-
 
 for __type, __name_set in names.items():
     __system = evaldict[__type]()
