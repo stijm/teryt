@@ -78,8 +78,8 @@ class SMLink(object):
     value: Any
 
     def __getitem__(self, item: (str, int)):
-        return ({item: getattr(self, item, '')}, [*dict(self).values()]
-                )[isinstance(item, int)][item]
+        return ({item: getattr(self, item, '')}, [*dict(self).values()])[
+            isinstance(item, int)][item]
 
     def __str__(self):
         return self.code or ''
