@@ -1,2 +1,5 @@
 pandas>=1.1.3
 simstring-pure
+
+numpy~=1.19.2
+setuptools~=50.3.1

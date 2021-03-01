@@ -961,7 +961,7 @@ class System(ABC):
         raise NotImplementedError
 
     def most_similar(self, name, inplace=True):
-        if name not in names[self.system]:
+        if name.lower() not in names[self.system]:
             rank = self._name_searcher.ranked_search(name, 0.4)
 
             if not rank:
