@@ -9,6 +9,7 @@ import pandas
 from . import na_char
 from .. import exceptions
 
+
 directory = os.path.abspath(os.path.dirname(__file__))
 
 

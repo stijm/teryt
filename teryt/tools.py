@@ -32,7 +32,7 @@ def ensure_column(item, frame) -> Series:
             lambda: item)[isinstance(item, Series)]()
 
 
-def set_broker(priority) -> type(lambda: None):
+def catalyst(priority) -> type(lambda: None):
     """
     Precede the function to be decorated with another function,
     e.g. to check the arguments given to the function.

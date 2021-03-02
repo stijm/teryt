@@ -16,43 +16,17 @@ from simstring.feature_extractor.character_ngram import (
 from simstring.measure.cosine import CosineMeasure
 from simstring.database.dict import DictDatabase
 from simstring.searcher import Searcher
-from typing import (
-    Any,
-    final,
-    Hashable,
-    Iterable,
-    List,
-    Union,
-    Type,
-)
+from typing import (Any, final, Hashable, Iterable, List, Union, Type,)
 from warnings import warn
 
 from .data import na_char
-from .data.implement import (
-    function_dict,
-    implement_common_data,
-    implement_specific_data
-)
-from .data.manager import (
-    simc_data,
-    terc_data,
-    ulic_data
-)
-from .exceptions import (
-    ErroneousUnitName,
-    Error,
-    LocalityNotFound,
-    StreetNotFound,
-    UnitNotFound,
-    UnpackError,
-)
-from .tools import (
-    disinherit,
-    require,
-    set_broker,
-    StringCaseFoldTuple,
-    StrSearch
-)
+from .data.implement import (function_dict, implement_common_data,
+                             implement_specific_data)
+from .data.manager import (simc_data, terc_data, ulic_data)
+from .exceptions import (ErroneousUnitName, Error, LocalityNotFound,
+                         StreetNotFound, UnitNotFound, UnpackError,)
+from .tools import (disinherit, require, catalyst, StringCaseFoldTuple,
+                    StrSearch, )
 
 systems = StringCaseFoldTuple(('simc', 'terc', 'ulic'))
 transfer_collector = {}
@@ -241,7 +215,7 @@ class Search(object):
         return self._search(keywords=keywords)
 
 
-class GenericLinkManagerBroker(object):
+class GenericLinkManagerCatalyst(object):
     def __init__(self):
         self.frame_linked_args = {}
         self.other_args = {}
@@ -295,7 +269,7 @@ class GenericLinkManager(object):
     dict_link_mgrs: "DictLinkManagers"
     frame_link_mgrs: "FrameLinkManagers"
 
-    broker = GenericLinkManagerBroker()
+    _catalyst = GenericLinkManagerCatalyst()
 
     def __init__(self, system, dict_link_mgrs, frame_link_mgrs):
         self.system = system
@@ -305,10 +279,10 @@ class GenericLinkManager(object):
         self.cache = self.system.cache[self.system.system].update
         self.indexes = {}
 
-    @set_broker(broker.link_names)
+    @catalyst(_catalyst.link_names)
     def link_names(self, **_keywords):
-        frame_linked_args = self.broker.frame_linked_args
-        other_args = self.broker.other_args
+        frame_linked_args = self._catalyst.frame_linked_args
+        other_args = self._catalyst.other_args
         extract = other_args.copy()
 
         for field in other_args.keys():
@@ -395,7 +369,7 @@ class GenericLinkManager(object):
         return (self.has_dict_link_mgr(field) or
                 self.has_frame_link_mgr(field))
 
-    @set_broker(broker.link)
+    @catalyst(_catalyst.link)
     def link(self, field: str, value: str):
         """
         Resolve entry that value in field refers to,
@@ -502,7 +476,7 @@ class GenericLinkManager(object):
         return gotitem
 
 
-class SystemBroker(object):
+class SystemCatalyst(object):
     @staticmethod
     def search(self, arguments, keywords):
         self.__init__(**self.modes)
@@ -725,7 +699,7 @@ class System(ABC):
 
     _name_searcher = None
 
-    broker = SystemBroker()
+    _catalyst = SystemCatalyst()
 
     def __init__(
             self,
@@ -828,7 +802,7 @@ class System(ABC):
             raise
 
     def __getitem__(self, item):
-        if isinstance(item, int):
+        if isinstance(item, (int, slice)):
             return self.multi_unpack(
                 self.database.iloc[item], link=self.link_mode)
 
@@ -1008,7 +982,7 @@ class System(ABC):
 
     r = res = results
 
-    @set_broker(broker.search)
+    @catalyst(_catalyst.search)
     def search(
             self,
             *args,  # noqa for autocompletion
@@ -1194,7 +1168,7 @@ class System(ABC):
                     self.entry_helper[field] = SMLink(
                         code=code, value=value)
 
-    @set_broker(broker.unpack_row)
+    @catalyst(_catalyst.unpack_row)
     def unpack_row(
             self,
             row: Union["EntryGroup", "Series", "DataFrame"] = None,  # noqa
@@ -1236,7 +1210,7 @@ class System(ABC):
             rows: Union["EntryGroup", "DataFrame"] = None,
             *,
             link=True,
-            ensure_list=True,
+            ensure_list=False,
     ) -> "Union[Entry, List[Entry]]":
         """
         Unpack DataFrame entries to Entry instance and return a list of it.
@@ -1333,7 +1307,7 @@ class System(ABC):
 implement_common_data(System)
 
 
-class EntryGroupBroker(object):
+class EntryGroupCatalyst(object):
     @staticmethod
     def to_keywords(self, arguments, _kwds):
         require(arguments, "to_keywords(): no arguments")
@@ -1350,7 +1324,7 @@ class EntryGroupBroker(object):
 
 
 class EntryGroup(object):
-    broker = EntryGroupBroker()
+    _catalyst = EntryGroupCatalyst()
 
     def __contains__(self, item):
         return self.frame.__contains__(item)
@@ -1428,7 +1402,7 @@ class EntryGroup(object):
 
     todict = to_dict
 
-    @set_broker(broker.to_keywords)
+    @catalyst(_catalyst.to_keywords)
     def to_keywords(self, target: Union[str, Type]):  # noqa
         """
         Create and return keywords leading to current search results.
@@ -1567,7 +1541,7 @@ class Entry(object):
     date: str = None
     index: int = None
 
-    broker = EntryGroupBroker()  # inherit broker from EGB
+    _catalyst = EntryGroupCatalyst()  # inherit broker from EGB
 
     @property
     def is_entry(self):
@@ -1592,7 +1566,7 @@ class Entry(object):
 
     r = res = frame = results
 
-    @set_broker(broker.to_keywords)
+    @catalyst(_catalyst.to_keywords)
     def to_keywords(self, transfer_target: Union[str, type]):
         """
         Create and return keywords leading to current search results.
@@ -1715,11 +1689,25 @@ class Street(Entry):
 
     @property
     def fullname(self):
-        return " ".join(
-            map(str, compress(
-                [self.streettype, self.secname, self.name],
-                [True, bool(self.secname), True]
-            )))
+        chunks = [self.streettype, self.secname, self.name]
+        selectors = [True, bool(self.secname), True]
+
+        return " ".join(map(str, compress(chunks, selectors)))
+
+    @staticmethod
+    def unpack_fullname(fullname, sep=" "):
+        chunks = (fullname.split() if not sep or sep.isspace() else
+                  fullname.split(sep))
+        data = {}
+        if len(chunks) not in [2, 3]:
+            raise UnpackError("fullname has to be 3-part composision of "
+                              "street type[, second name] and name. Length "
+                              f"of the chunks given equals {len(chunks)}")
+        data["streettype"] = chunks[0]
+        if len(chunks) == 3:
+            data["secname"] = chunks[1]
+        data["name"] = chunks[-1]
+        return data
 
 
 entry_types = {
