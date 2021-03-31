@@ -4,10 +4,10 @@
 # Author: Stim (stijm), 2021
 # License: MIT
 
-from types import SimpleNamespace
+from types import SimpleNamespace as Namespace
 
 
-COMMON = SimpleNamespace(
+COMMON = Namespace(
     gmitype_link_mgr={
         "miejska": "1",
         "gmina miejska": "1",
@@ -26,7 +26,7 @@ COMMON = SimpleNamespace(
     })
 
 
-SIMC = SimpleNamespace(
+SIMC = Namespace(
     fields={
         "voivodship": 'WOJ',
         "powiat": 'POW',
@@ -50,7 +50,8 @@ SIMC = SimpleNamespace(
         False: '0'
     },
 
-    # This is WMRODZ, in a dict…
+    # See also: WMRODZ
+    # ----------------
     loctype_link_mgr={
         "miasto": '96',
         "delegatura": '98',
@@ -67,7 +68,7 @@ SIMC = SimpleNamespace(
     }
 )
 
-TERC = SimpleNamespace(
+TERC = Namespace(
     fields={
         "voivodship": 'WOJ',
         "powiat": 'POW',
@@ -85,7 +86,7 @@ TERC = SimpleNamespace(
     }
 )
 
-ULIC = SimpleNamespace(
+ULIC = Namespace(
     fields={
         "voivodship": "WOJ",
         "powiat": "POW",
@@ -136,17 +137,19 @@ def update_vars_from_namespace(
         )
 
 
-def implement_common_data(register):
-    """ Internal helper function for implementing data on Register class. """
+def inject_master(register):
+    """
+    Internal helper function for implementing data on the System class.
+    """
     namespace = namespaces["COMMON"]
     update_vars_from_namespace(namespace, register)
 
 
-def implement_specific_data(simc, terc, ulic):
+def inject_slaves(simc, terc, ulic):
     """
-    Internal helper function for implementing data on Register subclasses.
+    Internal helper function for implementing data on the System subclasses.
     """
-    global SIMC, TERC, ULIC
+    global SIMC, TERC, ULIC  # pylint: disable=global-statement
 
     for klass in [simc, terc, ulic]:
         namespace = namespaces[klass.__name__]

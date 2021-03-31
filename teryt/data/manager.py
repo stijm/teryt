@@ -5,9 +5,10 @@
 # License: MIT
 
 import os
-import pandas
-from . import na_char
-from .. import exceptions
+import pandas as pd
+
+from teryt.data import NA_FILLCHAR
+from teryt.exceptions import ResourceError, MissingResourcesError
 
 
 directory = os.path.abspath(os.path.dirname(__file__))
@@ -30,18 +31,18 @@ def resource_file(system):
     files = os.listdir(path)
 
     if len(files) > 1:
-        raise exceptions.ResourceError(f"resource file path "
-                                       f"is indistinct; leave "
-                                       f"only 1 file in {path} "
-                                       f"to continue")
-    elif not files:
-        raise exceptions.MissingResourcesError(
+        raise ResourceError("resource file path "
+                            "is indistinct; leave "
+                            f"only 1 file in {path} "
+                            "to continue")
+    if not files:
+        raise MissingResourcesError(
             f"{system} resource not found in {path}")
 
     file = os.path.join(path, files[0])
 
     if not file.endswith(".csv"):
-        raise exceptions.ResourceError(f"only .csv is supported ({file})")
+        raise ResourceError(f"only .csv is supported ({file})")
 
     return file
 
@@ -52,11 +53,11 @@ read_csv_params = {
     "sep": ";",
 }
 
-simc_data = pandas.read_csv(resource_file("simc"), **read_csv_params)
-terc_data = pandas.read_csv(resource_file("terc"), **read_csv_params)
-ulic_data = pandas.read_csv(resource_file("ulic"), **read_csv_params)
+simc_data = pd.read_csv(resource_file("simc"), **read_csv_params)
+terc_data = pd.read_csv(resource_file("terc"), **read_csv_params)
+ulic_data = pd.read_csv(resource_file("ulic"), **read_csv_params)
 
 databases = [simc_data, ulic_data, terc_data]
 
 for database in databases:
-    database.fillna(na_char, inplace=True)
+    database.fillna(NA_FILLCHAR, inplace=True)

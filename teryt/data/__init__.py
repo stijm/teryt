@@ -4,4 +4,4 @@
 # Author: Stim (stijm), 2021
 # License: MIT
 
-na_char = "-"
+NA_FILLCHAR = "-"

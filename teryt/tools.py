@@ -4,10 +4,12 @@
 # Author: Stim (stijm), 2021
 # License: MIT
 
+import re
+
 from functools import wraps
-from pandas import DataFrame, Series  # noqa: F401
-from re import escape
 from typing import (Any, Sequence, Union)
+
+import pandas as pd
 
 
 def require(logic, error, default=ValueError) -> Any:
@@ -23,29 +25,30 @@ def require(logic, error, default=ValueError) -> Any:
     return logic
 
 
-def ensure_column(item, frame) -> Series:
+def ensure_column(item, frame) -> pd.Series:
     """
     If :item: is not a :frame: column, create it and return it.
     Otherwise, return :item: as a :frame: column.
     """
     return (lambda: frame[str(item)],
-            lambda: item)[isinstance(item, Series)]()
+            lambda: item)[isinstance(item, pd.Series)]()
 
 
-def catalyst(priority) -> type(lambda: None):
+def result_of(priority) -> type(lambda: None):
     """
     Precede the function to be decorated with another function,
     e.g. to check the arguments given to the function.
     """
-    def wrapper(sauce):
-        @wraps(sauce)
-        def priority_wrapper(self, *args, **kwargs):
-            priority(self, args, kwargs)
-            taste = sauce(self, *args, **kwargs)
-            return taste
+    def decorator(func):
 
-        return priority_wrapper
-    return wrapper
+        @wraps(func)
+        def prior(self, *args, **kwargs):
+            priority(self, args, kwargs)
+            result = func(self, *args, **kwargs)
+            return result
+
+        return prior
+    return decorator
 
 
 class StringCaseFoldTuple(tuple):
@@ -68,7 +71,7 @@ class StringCaseFoldTuple(tuple):
         return item.casefold() in self.casefold()
 
 
-class StrSearch(object):
+class StrSearch:
     """
     String DataFrame search broker, more understandable.
     """
@@ -84,8 +87,6 @@ class StrSearch(object):
         """
         self.frame = frame
 
-    # TODO: DRY and speed-up
-
     def get_method(self, name, default=None):
         if hasattr(self, name):
             return object.__getattribute__(self, name)
@@ -94,7 +95,7 @@ class StrSearch(object):
     def name(
             self,
             *,
-            root: (Series, str),
+            root: (pd.Series, str),
             value: str,
             case: bool
     ):
@@ -111,7 +112,7 @@ class StrSearch(object):
     def match(
             self,
             *,
-            root: (Series, str),
+            root: (pd.Series, str),
             value: str,
             case: bool
     ):
@@ -123,11 +124,11 @@ class StrSearch(object):
     def contains(
             self,
             *,
-            root: (Series, str),
+            root: (pd.Series, str),
             value: str,
             case: bool
     ):
-        value = escape(str(value))
+        value = re.escape(str(value))
         col = ensure_column(root, self.frame)
         return self.frame.loc[
                    (col.str.contains(value, case=case, na=False))
@@ -136,7 +137,7 @@ class StrSearch(object):
     def startswith(
             self,
             *,
-            root: (Series, str),
+            root: (pd.Series, str),
             value: str,
             case: bool
     ):
@@ -150,7 +151,7 @@ class StrSearch(object):
     def endswith(
             self,
             *,
-            root: (Series, str),
+            root: (pd.Series, str),
             value: str,
             case: bool
     ):
@@ -168,7 +169,7 @@ class DisinheritanceError(KeyError):
 
 def disinherit(parent: type, klasses: Union[type, Sequence[type]]):
     """
-    Stop classes (or one class) inheriting from their :parent: class.
+    Stop classes (or one class) inheriting from a :parent: class.
 
     Parameters
     ----------

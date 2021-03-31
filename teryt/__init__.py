@@ -9,7 +9,7 @@
 from .data.manager import resource_file
 from .data import implement
 
-from .core import (
+from .system import (
     ensure_field, Entry, entry_types, error_types, FrameLinkManagers, index,
     SMLink, link_types, Locality, LocalityLink, System, EntryGroup, search,
     Street, SIMC, Simc, simc, simc_data, systems, TERC, Terc, terc, to_dict,
